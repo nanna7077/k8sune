@@ -31,6 +31,11 @@ jobs:
           toolchain: stable
           profile: minimal
           override: true
+      - name: Install Linux build dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libappindicator3-dev libwebkit2gtk-4.0-dev
 
       - name: Install Tauri CLI (if not already installed)
         run: |
@@ -38,13 +43,29 @@ jobs:
             cargo install tauri-cli --locked
           fi
 
-      - name: Build Tauri application
-        run: npm run tauri build
+      - name: Build Tauri application (universal)
+        run: npm run tauri build -- --target universal-apple-darwin
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+
+      - name: Sign and notarize DMG
+        run: |
+          DMG=$(find src-tauri/target/universal-apple-darwin/release/bundle/dmg -name "*.dmg")
+          codesign --sign "$APPLE_CERTIFICATE" --deep --force "$DMG"
+          # Notarize (requires Apple notary credentials)
+          xcrun altool --notarize-app -f "$DMG" --primary-bundle-id "com.nanna7077.k8sune" -u "$APPLE_NOTARY_USER" -p "$APPLE_NOTARY_PASSWORD"
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          APPLE_NOTARY_USER: ${{ secrets.APPLE_NOTARY_USER }}
+          APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
 
       - name: Gather built bundles
         run: |
           mkdir -p artifacts
           find src-tauri/target/release/bundle -maxdepth 1 -not -name bundle -exec cp -r {} artifacts/ \;
+          find src-tauri/target/universal-apple-darwin/release/bundle/dmg -name "*.dmg" -exec cp {} artifacts/ \;
 
       - name: Upload assets to GitHub Release
         uses: softprops/action-gh-release@v2
