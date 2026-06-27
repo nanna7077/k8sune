@@ -1,0 +1,96 @@
+name: Package and Release
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Set up Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          override: true
+
+      - name: Install Tauri CLI (if not already installed)
+        run: |
+          if ! command -v tauri >/dev/null 2>&1; then
+            cargo install tauri-cli --locked
+          fi
+
+      - name: Build Tauri application
+        run: npm run tauri build
+
+      - name: Gather built bundles
+        run: |
+          mkdir -p artifacts
+          find src-tauri/target/release/bundle -maxdepth 1 -not -name bundle -exec cp -r {} artifacts/ \;
+
+      - name: Upload assets to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  homebrew:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Homebrew tap repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.HOMEBREW_TAP_REPO }}
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Generate/Update Homebrew formula
+        env:
+          REPO: ${{ github.repository }}
+          VERSION: ${{ github.event.release.tag_name }}
+        run: |
+          FORMULA_PATH="tap/Formula/k8sune.rb"
+          cat > "$FORMULA_PATH" <<EOF2
+          class K8sune < Formula
+            desc "K8sune description"
+            homepage "https://github.com/${REPO}"
+            url "https://github.com/${REPO}/releases/download/${VERSION}/k8sune-${VERSION}.tar.gz"
+            sha256 "$(curl -L https://github.com/${REPO}/releases/download/${VERSION}/k8sune-${VERSION}.tar.gz.sha256)"
+            license "MPL-2.0"
+
+            def install
+              bin.install "k8sune"
+            end
+          end
+          EOF2
+
+      - name: Commit and push formula
+        run: |
+          cd tap
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add Formula/k8sune.rb
+          git commit -m "Release ${{ github.event.release.tag_name }}"
+          git push origin HEAD
+        env:
+          GIT_AUTHOR_NAME: github-actions
+          GIT_AUTHOR_EMAIL: github-actions@github.com
+
+
