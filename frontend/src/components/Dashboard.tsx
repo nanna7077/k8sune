@@ -40,7 +40,8 @@ import {
   Card,
   CardHeader,
   Dropdown,
-  Option
+  Option,
+  Textarea
 } from "@fluentui/react-components";
 import { 
   MoreHorizontal20Regular, 
@@ -63,10 +64,11 @@ import {
   ArrowSortDown20Regular,
   ArrowSortUp20Regular,
   ChevronLeft20Regular,
-  Circle20Regular,
   Warning20Regular,
   CheckmarkCircle20Regular,
-  Filter20Regular
+  ArrowUpload20Regular,
+  Add20Regular,
+  WindowConsole20Regular
 } from '@fluentui/react-icons';
 import { apiFetch, getBackendPort } from '../utils/api';
 import { openSectionWindow } from '../utils/windowManager';
@@ -74,6 +76,9 @@ import { useStore } from '../store/useStore';
 import { Mascot } from './Mascot';
 import { LogsViewer } from './LogsViewer';
 import { YamlEditor } from './YamlEditor';
+import { ShellTerminal } from './ShellTerminal';
+import { open } from '@tauri-apps/plugin-dialog';
+import { readTextFile } from '@tauri-apps/plugin-fs';
 
 const useStyles = makeStyles({
   container: {
@@ -289,9 +294,10 @@ interface CRD {
 
 interface PanelState {
   id: string;
-  type: 'logs' | 'yaml';
+  type: 'logs' | 'yaml' | 'shell';
   namespace: string;
   name: string;
+  container?: string;
 }
 
 interface ResourceDetail {
@@ -322,13 +328,18 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
   const [panels, setPanels] = useState<PanelState[]>([]);
   const [activePanelId, setActivePanelId] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isImportOpen, setIsImportOpen] = useState(false);
+  const [importTab, setImportTab] = useState('file');
+  const [importYaml, setImportYaml] = useState('');
   const [drawerHeight, setDrawerHeight] = useState(400);
   const isResizing = useRef(false);
   
   const [resources, setResources] = useState<ResourceItem[]>([]);
+  const [metrics, setMetrics] = useState<Record<string, any>>({});
   const [crds, setCrds] = useState<CRD[]>([]);
   const [namespaces, setNamespaces] = useState<string[]>([]);
   const [selectedNamespaces, setSelectedNamespaces] = useState<string[]>(['All Namespaces']);
+  const [clusterSettings, setClusterSettings] = useState<any>({ metrics_source: 'standard' });
   const [overview, setOverview] = useState<any>(null);
   const [selectedResource, setSelectedResource] = useState<{ type: string, name: string, namespace?: string } | null>(null);
   const [resourceDetail, setResourceDetail] = useState<ResourceDetail | null>(null);
@@ -337,6 +348,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
   const [detailEvents, setDetailEvents] = useState<any[]>([]);
   
   const eventSourceRef = useRef<EventSource | null>(null);
+  const [isReachable, setIsReachable] = useState<boolean>(true);
 
   // Sorting state
   const [sortState, setSortState] = useState<{ columnId: string, direction: 'ascending' | 'descending' }>({ 
@@ -365,6 +377,30 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
       console.error(e);
     }
   };
+
+  const fetchClusterSettings = async () => {
+      if (!context) return;
+      try {
+          const data = await apiFetch<any>(`/api/contexts/settings/${context}`);
+          setClusterSettings(data || { metrics_source: 'standard' });
+      } catch (e) {
+          console.error(e);
+      }
+  }
+
+  const saveClusterSettings = async (newSettings: any) => {
+      if (!context) return;
+      try {
+          await apiFetch(`/api/contexts/settings/${context}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ settings: newSettings })
+          });
+          setClusterSettings(newSettings);
+      } catch (e) {
+          alert(`Failed to save settings: ${e}`);
+      }
+  }
 
   const loadData = async () => {
     if (!context) return;
@@ -402,10 +438,37 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
       } else {
         if (eventSourceRef.current) eventSourceRef.current.close();
       }
+      setIsReachable(true);
     } catch (e) {
       console.error(e);
+      setIsReachable(false);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchMetrics = async () => {
+    if (!context || (activeView !== 'pods' && activeView !== 'nodes' && activeView !== 'deployments' && !selectedResource)) return;
+    try {
+        const resourceType = selectedResource ? (selectedResource.type === 'nodes' ? 'nodes' : 'pods') : (activeView === 'nodes' ? 'nodes' : 'pods');
+        const ns = selectedResource?.namespace || (selectedNamespaces.includes('All Namespaces') ? '' : selectedNamespaces[0]);
+        
+        let url = `/api/resources/${context}/metrics/${resourceType}`;
+        if (ns) url += `?namespace=${ns}`;
+
+        const data = await apiFetch<any>(url);
+        if (data.items) {
+            const newMetrics: Record<string, any> = {};
+            data.items.forEach((item: any) => {
+                const name = item.metadata.name;
+                const ns = item.metadata.namespace;
+                const key = ns ? `${ns}/${name}` : name;
+                newMetrics[key] = item;
+            });
+            setMetrics(newMetrics);
+        }
+    } catch (e) {
+        console.error("Metrics fetch failed", e);
     }
   };
 
@@ -447,6 +510,45 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
 
       } catch (e) {
           console.error(e);
+      } finally {
+          setLoading(false);
+      }
+  }
+
+  const handleImport = async () => {
+      let content = importYaml;
+      if (importTab === 'file') {
+          try {
+              const selected = await open({
+                  filters: [{ name: 'Kubeconfig', extensions: ['yaml', 'yml', 'conf', 'config'] }]
+              });
+              if (selected && !Array.isArray(selected)) {
+                  content = await readTextFile(selected);
+              } else return;
+          } catch (e) {
+              alert(`Error reading file: ${e}`);
+              return;
+          }
+      }
+
+      if (!content) {
+          alert('No kubeconfig content provided');
+          return;
+      }
+
+      setLoading(true);
+      try {
+          await apiFetch('/api/contexts/import', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ yaml_content: content })
+          });
+          setIsImportOpen(false);
+          setImportYaml('');
+          await fetchContexts();
+          alert('Kubeconfig imported and merged successfully');
+      } catch (e) {
+          alert(`Import failed: ${e}`);
       } finally {
           setLoading(false);
       }
@@ -503,6 +605,14 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
     setActivePanelId(id);
   };
 
+  const handleOpenShell = (namespace: string, pod: string, container: string) => {
+    const id = `shell-${namespace}-${pod}-${container}`;
+    if (!panels.find(p => p.id === id)) {
+      setPanels(prev => [...prev, { id, type: 'shell', namespace, name: pod, container }]);
+    }
+    setActivePanelId(id);
+  };
+
   const handleClosePanel = (id: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     setPanels(prev => {
@@ -518,7 +628,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
     if (!context) return;
     if (panel.type === 'logs') {
       openSectionWindow('logs', { context, namespace: panel.namespace, pod: panel.name });
-    } else {
+    } else if (panel.type === 'yaml') {
       openSectionWindow('yaml', { context, namespace: panel.namespace, name: panel.name, resourceType: activeView === 'pods' ? 'pods' : 'deployments' });
     }
     handleClosePanel(panel.id);
@@ -557,13 +667,19 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
   useEffect(() => {
     loadData();
     fetchNamespaces();
+    fetchClusterSettings();
     if (crds.length === 0 && context) {
         apiFetch<{ items: CRD[] }>(`/api/crds/${context}`).then(data => setCrds(data.items));
     }
+
+    const metricsInterval = setInterval(fetchMetrics, 30000);
+    fetchMetrics();
+
     return () => {
       if (eventSourceRef.current) eventSourceRef.current.close();
+      clearInterval(metricsInterval);
     };
-  }, [activeView, context]);
+  }, [activeView, context, selectedResource]);
 
   useEffect(() => {
       if (selectedResource) {
@@ -653,6 +769,8 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
         return [
           ...common,
           sortableHeader('status', 'Status'),
+          sortableHeader('cpu', 'CPU'),
+          sortableHeader('mem', 'Memory'),
           sortableHeader('ip', 'IP Address'),
           <TableHeaderCell key="actions" style={{ width: '40px' }}></TableHeaderCell>
         ];
@@ -688,6 +806,46 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
     }
   };
 
+  const getMetricValues = (r: ResourceItem) => {
+    const key = r.namespace ? `${r.namespace}/${r.name}` : r.name;
+    const m = metrics[key];
+    if (!m) return { cpu: '---', mem: '---' };
+
+    let cpu = 0;
+    let mem = 0;
+    
+    if (m.containers) {
+        m.containers.forEach((c: any) => {
+            const c_cpu = c.usage.cpu;
+            if (c_cpu.endsWith('n')) cpu += parseInt(c_cpu) / 1000000;
+            else if (c_cpu.endsWith('u')) cpu += parseInt(c_cpu) / 1000;
+            else cpu += parseInt(c_cpu) * 1000;
+
+            const c_mem = c.usage.memory;
+            if (c_mem.endsWith('Ki')) mem += parseInt(c_mem) * 1024;
+            else if (c_mem.endsWith('Mi')) mem += parseInt(c_mem) * 1024 * 1024;
+            else if (c_mem.endsWith('Gi')) mem += parseInt(c_mem) * 1024 * 1024 * 1024;
+            else mem += parseInt(c_mem);
+        });
+    } else if (m.usage) {
+        const n_cpu = m.usage.cpu;
+        if (n_cpu.endsWith('n')) cpu = parseInt(n_cpu) / 1000000;
+        else if (n_cpu.endsWith('u')) cpu = parseInt(n_cpu) / 1000;
+        else cpu = parseInt(n_cpu) * 1000;
+
+        const n_mem = m.usage.memory;
+        if (n_mem.endsWith('Ki')) mem = parseInt(n_mem) * 1024;
+        else if (n_mem.endsWith('Mi')) mem = parseInt(n_mem) * 1024 * 1024;
+        else if (n_mem.endsWith('Gi')) mem = parseInt(n_mem) * 1024 * 1024 * 1024;
+        else mem = parseInt(n_mem);
+    }
+
+    return {
+        cpu: `${cpu.toFixed(1)}m`,
+        mem: `${(mem / (1024 * 1024)).toFixed(1)} MiB`
+    };
+  };
+
   const renderResourceRow = (r: ResourceItem) => {
     const commonCells = [
       <TableCell key="name"><span className={styles.clickableName} onClick={() => setSelectedResource({ type: activeView, name: r.name, namespace: r.namespace })}>{r.name}</span></TableCell>,
@@ -702,7 +860,12 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                 </MenuTrigger>
                 <MenuPopover>
                     <MenuList>
-                        {(activeView === 'pods' || r.type === 'pods') && <MenuItem icon={<TextBulletList20Regular />} onClick={() => handleOpenLogs(r.namespace!, r.name)}>View Logs</MenuItem>}
+                        {(activeView === 'pods' || r.type === 'pods') && (
+                            <>
+                            <MenuItem icon={<TextBulletList20Regular />} onClick={() => handleOpenLogs(r.namespace!, r.name)}>View Logs</MenuItem>
+                            <MenuItem icon={<WindowConsole20Regular />} onClick={() => handleOpenShell(r.namespace!, r.name, r.raw?.spec?.containers[0]?.name || 'default')}>Execute Shell</MenuItem>
+                            </>
+                        )}
                         <MenuItem icon={<Document20Regular />} onClick={() => handleOpenYaml(r.namespace || 'default', r.name)}>Edit YAML</MenuItem>
                     </MenuList>
                 </MenuPopover>
@@ -743,6 +906,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                 </TableRow>
             );
         case 'pods':
+            const { cpu, mem } = getMetricValues(r);
             return (
                 <TableRow key={`${r.namespace}-${r.name}`}>
                     {commonCells}
@@ -751,6 +915,8 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                             {r.status?.toLowerCase()}
                         </Badge>
                     </TableCell>
+                    <TableCell><span style={{ fontSize: '0.8rem' }}>{cpu}</span></TableCell>
+                    <TableCell><span style={{ fontSize: '0.8rem' }}>{mem}</span></TableCell>
                     <TableCell><code style={{ fontSize: '0.75rem', opacity: 0.7 }}>{r.ip || '---'}</code></TableCell>
                     {actions}
                 </TableRow>
@@ -845,6 +1011,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                   </MenuItem>
                 ))}
                 <MenuItem icon={<ArrowClockwise20Regular />} onClick={fetchContexts}>Refresh List</MenuItem>
+                <MenuItem icon={<Add20Regular />} onClick={() => setIsImportOpen(true)}>Import Kubeconfig</MenuItem>
               </MenuList>
             </MenuPopover>
           </Menu>
@@ -1011,6 +1178,41 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
         </div>
 
         <div style={{ marginTop: 'auto', paddingTop: '1rem' }}>
+          <Dialog open={isImportOpen} onOpenChange={(_, data) => setIsImportOpen(data.open)}>
+            <DialogSurface>
+                <DialogBody>
+                    <DialogTitle>Import Kubeconfig</DialogTitle>
+                    <DialogContent>
+                        <div className={styles.settingsContent}>
+                            <TabList size="small" selectedValue={importTab} onTabSelect={(_, d) => setImportTab(d.value as string)}>
+                                <Tab value="file">From File</Tab>
+                                <Tab value="yaml">Paste YAML</Tab>
+                            </TabList>
+                            <div style={{ marginTop: '1rem' }}>
+                                {importTab === 'file' ? (
+                                    <div style={{ textAlign: 'center', padding: '2rem', border: '1px dashed var(--colorNeutralStroke1)', borderRadius: '8px' }}>
+                                        <Button icon={<ArrowUpload20Regular />} onClick={handleImport}>Choose File</Button>
+                                        <div style={{ marginTop: '0.5rem', fontSize: '0.8rem', opacity: 0.6 }}>Select your .kube/config or other cluster YAML</div>
+                                    </div>
+                                ) : (
+                                    <Textarea 
+                                        placeholder="Paste your kubeconfig YAML here..." 
+                                        style={{ width: '100%', minHeight: '200px' }}
+                                        value={importYaml}
+                                        onChange={(e) => setImportYaml(e.target.value)}
+                                    />
+                                )}
+                            </div>
+                        </div>
+                    </DialogContent>
+                    <DialogActions>
+                        <Button appearance="subtle" onClick={() => setIsImportOpen(false)}>Cancel</Button>
+                        {importTab === 'yaml' && <Button appearance="primary" onClick={handleImport} disabled={!importYaml}>Import</Button>}
+                    </DialogActions>
+                </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
           <Dialog open={isSettingsOpen} onOpenChange={(_, data) => setIsSettingsOpen(data.open)}>
             <DialogTrigger disableButtonEnhancement>
               <Button icon={<Settings20Regular />} appearance="subtle" className={styles.sidebarItem}>
@@ -1025,11 +1227,33 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                     <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '1rem' }}>
                        <img src="/sprites/k8sune-wave.png" alt="wave" style={{ width: '180px', height: 'auto' }} />
                     </div>
+                    
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                      <Label weight="semibold">Cluster Connection</Label>
-                      <div style={{ fontSize: '0.85rem', opacity: 0.7 }}>
-                        Current Context: <code style={{ color: 'var(--colorBrandForeground1)' }}>{context || 'None'}</code>
-                      </div>
+                      <Label weight="semibold">Metrics Source</Label>
+                      <Dropdown 
+                        value={clusterSettings.metrics_source || 'standard'} 
+                        selectedOptions={[clusterSettings.metrics_source || 'standard']}
+                        onOptionSelect={(_, data) => saveClusterSettings({ ...clusterSettings, metrics_source: data.optionValue })}
+                      >
+                        <Option value="standard">Metrics API (Standard)</Option>
+                        <Option value="custom">Custom Metrics Server</Option>
+                      </Dropdown>
+                      {clusterSettings.metrics_source === 'custom' && (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.5rem' }}>
+                            <Input 
+                                placeholder="Custom Endpoint URL" 
+                                value={clusterSettings.custom_metrics_endpoint || ''}
+                                onChange={(e) => setClusterSettings({ ...clusterSettings, custom_metrics_endpoint: e.target.value })}
+                                onBlur={() => saveClusterSettings(clusterSettings)}
+                            />
+                             <Input 
+                                placeholder="Cluster Label (e.g. cluster=prod)" 
+                                value={clusterSettings.metrics_labels || ''}
+                                onChange={(e) => setClusterSettings({ ...clusterSettings, metrics_labels: e.target.value })}
+                                onBlur={() => saveClusterSettings(clusterSettings)}
+                            />
+                          </div>
+                      )}
                     </div>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
@@ -1109,6 +1333,22 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                   <Mascot />
                   <Subtitle1>Select a cluster context to begin</Subtitle1>
                </div>
+            ) : !isReachable ? (
+               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '1.5rem', padding: '2rem' }}>
+                  <img src="/sprites/k8sune-tired.png" alt="Cluster Not Reachable" style={{ width: '180px', height: '180px', objectFit: 'contain' }} />
+                  <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '0.5rem', maxWidth: '400px' }}>
+                      <Title3 style={{ color: 'var(--colorBrandForeground1)', fontWeight: '800' }}>Cluster Not Reachable</Title3>
+                      <Subtitle1 style={{ opacity: 0.8 }}>
+                          Could not connect to the cluster context "{context}".
+                      </Subtitle1>
+                      <span style={{ fontSize: '0.85rem', opacity: 0.6 }}>
+                          Please verify your network connection, kubeconfig, and check if the API server is online.
+                      </span>
+                  </div>
+                  <Button appearance="primary" icon={loading ? <Spinner size="tiny" /> : <ArrowClockwise20Regular />} onClick={loadData} disabled={loading}>
+                      {loading ? 'Connecting...' : 'Try Again'}
+                  </Button>
+               </div>
             ) : selectedResource ? (
                 loading && !resourceDetail ? (
                     <div style={{ display: 'flex', justifyContent: 'center', paddingTop: '4rem' }}>
@@ -1116,7 +1356,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                     </div>
                 ) : resourceDetail ? (
                     <div className={styles.detailView}>
-                        <TabList size="small" selectedValue={detailTab} onTabSelect={(_, d) => setDetailTab(d.value as string)}>
+                        <TabList size="small" selectedValue={detailTab} onTabSelect={(_, data) => setDetailTab(data.value as string)}>
                             <Tab value="overview">Overview</Tab>
                             {(selectedResource.type === 'nodes' || selectedResource.type === 'deployments' || selectedResource.type === 'statefulsets' || selectedResource.type === 'daemonsets') && <Tab value="pods">Pods ({detailPods.length})</Tab>}
                             <Tab value="events">Events ({detailEvents.length})</Tab>
@@ -1144,7 +1384,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                                     <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)' }}>
                                         <CardHeader header={<Subtitle2>Conditions</Subtitle2>} />
                                         <div className={styles.kvTable} style={{ padding: '1rem' }}>
-                                            {resourceDetail.status.conditions.map((c: any) => (
+                                            {resourceDetail.status.conditions?.map((c: any) => (
                                                 <div key={c.type} style={{ display: 'contents' }}>
                                                     <span>{c.type}</span>
                                                     <Badge color={c.status === 'True' ? (c.type === 'Ready' ? 'success' : 'important') : (c.type === 'Ready' ? 'important' : 'success')}>
@@ -1217,7 +1457,19 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                                                         </div>
                                                         <Badge appearance="tint" style={{ maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.image}</Badge>
                                                     </div>
-                                                } />
+                                                } 
+                                                action={
+                                                    selectedResource.type === 'pods' ? (
+                                                        <Button 
+                                                            size="small" 
+                                                            icon={<WindowConsole20Regular />} 
+                                                            onClick={() => handleOpenShell(resourceDetail.metadata.namespace, resourceDetail.metadata.name, c.name)}
+                                                        >
+                                                            Shell
+                                                        </Button>
+                                                    ) : undefined
+                                                }
+                                                />
                                                 <div style={{ padding: '1rem' }}>
                                                     <div className={styles.kvTable}>
                                                         {status && (
@@ -1254,16 +1506,23 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                                             <TableHeaderCell>Name</TableHeaderCell>
                                             <TableHeaderCell>Namespace</TableHeaderCell>
                                             <TableHeaderCell>Status</TableHeaderCell>
+                                            <TableHeaderCell>CPU</TableHeaderCell>
+                                            <TableHeaderCell>Memory</TableHeaderCell>
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
-                                        {detailPods.map(p => (
-                                            <TableRow key={p.name}>
-                                                <TableCell><span className={styles.clickableName} onClick={() => setSelectedResource({ type: 'pods', name: p.name, namespace: p.namespace })}>{p.name}</span></TableCell>
-                                                <TableCell><Badge appearance="tint">{p.namespace}</Badge></TableCell>
-                                                <TableCell><Badge color={p.status === 'Running' ? 'success' : 'important'}>{p.status}</Badge></TableCell>
-                                            </TableRow>
-                                        ))}
+                                        {detailPods.map(p => {
+                                            const { cpu, mem } = getMetricValues(p);
+                                            return (
+                                                <TableRow key={p.name}>
+                                                    <TableCell><span className={styles.clickableName} onClick={() => setSelectedResource({ type: 'pods', name: p.name, namespace: p.namespace })}>{p.name}</span></TableCell>
+                                                    <TableCell><Badge appearance="tint">{p.namespace}</Badge></TableCell>
+                                                    <TableCell><Badge color={p.status === 'Running' ? 'success' : 'important'}>{p.status}</Badge></TableCell>
+                                                    <TableCell><span style={{ fontSize: '0.8rem' }}>{cpu}</span></TableCell>
+                                                    <TableCell><span style={{ fontSize: '0.8rem' }}>{mem}</span></TableCell>
+                                                </TableRow>
+                                            );
+                                        })}
                                     </TableBody>
                                 </Table>
                             </div>
@@ -1448,7 +1707,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                   <Tab key={p.id} value={p.id}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                        <span style={{ fontSize: '0.8rem' }}>
-                        {p.type === 'logs' ? 'Logs' : 'YAML'}: {p.name}
+                        {p.type === 'logs' ? 'Logs' : p.type === 'yaml' ? 'YAML' : 'Shell'}: {p.name}
                       </span>
                       <div className={styles.closeTabButton} onClick={(e) => handleClosePanel(p.id, e)}>
                          <Dismiss16Regular />
@@ -1459,7 +1718,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
               </TabList>
               
               <div style={{ display: 'flex', gap: '0.25rem', paddingRight: '0.5rem' }}>
-                {activePanel && (
+                {activePanel && activePanel.type !== 'shell' && (
                   <Button 
                     size="small" 
                     appearance="subtle" 
@@ -1475,12 +1734,19 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                 <div key={p.id} style={{ display: p.id === activePanelId ? 'block' : 'none', height: '100%' }}>
                   {p.type === 'logs' ? (
                     <LogsViewer context={context} namespace={p.namespace} pod={p.name} />
-                  ) : (
+                  ) : p.type === 'yaml' ? (
                     <YamlEditor 
                       context={context} 
                       namespace={p.namespace} 
                       name={p.name} 
                       resourceType={activeView === 'pods' ? 'pods' : 'deployments'} 
+                    />
+                  ) : (
+                    <ShellTerminal
+                        context={context}
+                        namespace={p.namespace}
+                        pod={p.name}
+                        container={p.container || 'default'}
                     />
                   )}
                 </div>

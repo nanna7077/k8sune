@@ -8,11 +8,11 @@ import { Dashboard } from './components/Dashboard';
 import { LogsViewer } from './components/LogsViewer';
 import { YamlEditor } from './components/YamlEditor';
 import { TitleBar } from './components/TitleBar';
+import { WindowResizer } from './components/WindowResizer';
 
 function App() {
   const { 
-    activeContext,
-    setActiveContext 
+    activeContext
   } = useStore();
 
   useEffect(() => {
@@ -40,6 +40,7 @@ function App() {
     return (
       <FluentProvider theme={k8suneTheme}>
         <TitleBar title={`k8sune - Logs [${pod}]`} />
+        <WindowResizer />
         <div style={{ paddingTop: '32px', height: '100%', width: '100%', boxSizing: 'border-box' }}>
           <LogsViewer context={context} namespace={namespace} pod={pod} />
         </div>
@@ -51,6 +52,7 @@ function App() {
     return (
       <FluentProvider theme={k8suneTheme}>
         <TitleBar title={`k8sune - YAML [${name}]`} />
+        <WindowResizer />
         <div style={{ paddingTop: '32px', height: '100%', width: '100%', boxSizing: 'border-box' }}>
           <YamlEditor context={context} namespace={namespace} name={name} resourceType={resourceType} />
         </div>
@@ -61,6 +63,7 @@ function App() {
   return (
     <FluentProvider theme={k8suneTheme}>
        <TitleBar />
+       <WindowResizer />
        <div style={{ paddingTop: '32px', height: '100%', width: '100%', boxSizing: 'border-box' }}>
           <Dashboard context={context} />
        </div>

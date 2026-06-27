@@ -9,6 +9,7 @@ from backend.api.resources import router as resources_router
 from backend.api.logs import router as logs_router
 from backend.api.yaml_editor import router as yaml_router
 from backend.api.crds import router as crds_router
+from backend.api.terminal import router as terminal_router
 from backend.cluster.manager import cluster_manager
 
 @asynccontextmanager
@@ -35,6 +36,7 @@ app.include_router(resources_router, prefix="/api")
 app.include_router(logs_router, prefix="/api")
 app.include_router(yaml_router, prefix="/api")
 app.include_router(crds_router, prefix="/api")
+app.include_router(terminal_router, prefix="/api")
 
 @app.get("/ping")
 async def ping():

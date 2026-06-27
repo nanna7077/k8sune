@@ -56,9 +56,16 @@ pub fn run() {
       }
 
       tauri::async_runtime::spawn(async move {
-          let mut cmd = Command::new("../backend/venv/bin/python");
-          cmd.arg("../backend/main.py");
-          cmd.env("PYTHONPATH", "..");
+          let current_dir = std::env::current_dir().unwrap_or_default();
+          let project_root = current_dir.parent().unwrap_or(&current_dir);
+          
+          let python_path = project_root.join("backend/venv/bin/python");
+          let main_path = project_root.join("backend/main.py");
+          let pythonpath = project_root;
+
+          let mut cmd = Command::new(python_path);
+          cmd.arg(main_path);
+          cmd.env("PYTHONPATH", pythonpath);
           
           cmd.stdout(std::process::Stdio::piped());
           cmd.stderr(std::process::Stdio::piped());

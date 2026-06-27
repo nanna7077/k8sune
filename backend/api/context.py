@@ -21,6 +21,32 @@ async def verify_context(context_name: str):
         print(f"Failed to verify context {context_name}: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
+from pydantic import BaseModel
+
+class ImportRequest(BaseModel):
+    yaml_content: str
+
+@router.post("/contexts/import")
+async def import_kubeconfig(req: ImportRequest):
+    try:
+        await cluster_manager.merge_kubeconfig(req.yaml_content)
+        return {"status": "ok", "message": "Kubeconfig imported successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.get("/contexts/settings/{context_name}")
+async def get_cluster_settings(context_name: str):
+    return cluster_manager.cluster_settings.get(context_name, {})
+
+class SettingsUpdate(BaseModel):
+    settings: dict
+
+@router.post("/contexts/settings/{context_name}")
+async def update_cluster_settings(context_name: str, req: SettingsUpdate):
+    for k, v in req.settings.items():
+        cluster_manager.set_cluster_setting(context_name, k, v)
+    return {"status": "ok"}
+
 @router.get("/health")
 async def health():
     return {"status": "ok"}

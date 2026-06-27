@@ -1,6 +1,5 @@
-import { useState, useEffect } from 'react';
-import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
-import { makeStyles, shorthands, Button } from "@fluentui/react-components";
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { makeStyles, shorthands } from "@fluentui/react-components";
 import { 
   Dismiss20Regular, 
   Square20Regular, 
@@ -65,11 +64,10 @@ const useStyles = makeStyles({
 
 export const TitleBar = ({ title = "k8sune" }: { title?: string }) => {
   const styles = useStyles();
-  const appWindow = getCurrentWebviewWindow();
 
   const handleMinimize = async () => {
     try {
-      await appWindow.minimize();
+      await getCurrentWindow().minimize();
     } catch (e) {
       console.error(e);
     }
@@ -77,7 +75,7 @@ export const TitleBar = ({ title = "k8sune" }: { title?: string }) => {
   
   const handleMaximize = async () => {
     try {
-      await appWindow.toggleMaximize();
+      await getCurrentWindow().toggleMaximize();
     } catch (e) {
       console.error("Maximize failed", e);
     }
@@ -85,7 +83,15 @@ export const TitleBar = ({ title = "k8sune" }: { title?: string }) => {
   
   const handleClose = async () => {
     try {
-      await appWindow.close();
+      await getCurrentWindow().close();
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleDrag = () => {
+    try {
+      getCurrentWindow().startDragging();
     } catch (e) {
       console.error(e);
     }
@@ -94,15 +100,17 @@ export const TitleBar = ({ title = "k8sune" }: { title?: string }) => {
   return (
     <div 
       className={styles.titlebar}
-      data-tauri-drag-region
+      onDoubleClick={handleMaximize}
     >
       <div 
         className={styles.dragRegion}
-        data-tauri-drag-region
+        onMouseDown={(e) => {
+          if (e.buttons === 1) handleDrag();
+        }}
       >
         <span className={styles.title} style={{ pointerEvents: 'none' }}>{title}</span>
       </div>
-      <div className={styles.controls}>
+      <div className={styles.controls} onDoubleClick={(e) => e.stopPropagation()}>
         <div className={styles.controlButton} onClick={handleMinimize}>
           <Subtract20Regular />
         </div>

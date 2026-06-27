@@ -10,6 +10,7 @@ export const openSectionWindow = async (section: string, params: Record<string, 
     width: section === 'logs' || section === 'yaml' ? 1000 : 1200,
     height: 800,
     decorations: false,
+    resizable: true,
   });
 
   webview.once('tauri://created', () => {

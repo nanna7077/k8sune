@@ -555,6 +555,45 @@ async def watch_pods(request: Request, context_name: str, namespace: str = None)
             yield json.dumps(data)
     return EventSourceResponse(event_generator())
 
+@router.get("/resources/{context_name}/metrics/{resource_type}")
+async def get_metrics(context_name: str, resource_type: str, namespace: str = None, name: str = None):
+    try:
+        client = await cluster_manager.get_client(context_name)
+        custom_api = CustomObjectsApi(client)
+        
+        # Check for custom metrics server settings
+        metrics_source = cluster_manager.get_cluster_setting(context_name, "metrics_source", "standard")
+        custom_endpoint = cluster_manager.get_cluster_setting(context_name, "custom_metrics_endpoint")
+        extra_labels = cluster_manager.get_cluster_setting(context_name, "metrics_labels", {})
+
+        # Standard K8s Metrics API
+        if metrics_source == "standard" or not custom_endpoint:
+            try:
+                if resource_type == 'pods':
+                    if namespace:
+                        if name:
+                            data = await custom_api.get_namespaced_custom_object("metrics.k8s.io", "v1beta1", namespace, "pods", name)
+                            return {"items": [data]}
+                        data = await custom_api.list_namespaced_custom_object("metrics.k8s.io", "v1beta1", namespace, "pods")
+                    else:
+                        data = await custom_api.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "pods")
+                    return data
+                elif resource_type == 'nodes':
+                    if name:
+                        data = await custom_api.get_cluster_custom_object("metrics.k8s.io", "v1beta1", "nodes", name)
+                        return {"items": [data]}
+                    data = await custom_api.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "nodes")
+                    return data
+            except Exception as e:
+                return {"items": [], "error": f"Metrics API not available: {e}"}
+        
+        # Custom Metrics Server (Best effort mock implementation)
+        # In a real scenario, this would query Prometheus or the custom endpoint
+        return {"items": [], "warning": "Custom metrics server integration not fully implemented"}
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 @router.delete("/resources/{context_name}/pods/{namespace}/{pod_name}")
 async def delete_pod(context_name: str, namespace: str, pod_name: str):
     try:

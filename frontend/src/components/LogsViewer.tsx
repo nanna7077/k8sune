@@ -3,8 +3,7 @@ import {
   makeStyles, 
   shorthands, 
   Button,
-  Select,
-  Label
+  Select
 } from "@fluentui/react-components";
 import { ArrowDownload20Regular } from '@fluentui/react-icons';
 import { getBackendPort } from '../utils/api';
