@@ -21,7 +21,21 @@ export const apiFetch = async <T>(path: string, options: RequestInit = {}): Prom
   const response = await fetch(`http://127.0.0.1:${port}${path}`, options);
   
   if (!response.ok) {
-    throw new Error(`API Error: ${response.statusText}`);
+    let errorDetail = response.statusText;
+    try {
+      const errBody = await response.json();
+      if (errBody && errBody.detail) {
+        errorDetail = errBody.detail;
+      } else if (errBody && errBody.message) {
+        errorDetail = errBody.message;
+      }
+    } catch (_) {
+      try {
+        const text = await response.text();
+        if (text) errorDetail = text;
+      } catch (_) {}
+    }
+    throw new Error(errorDetail);
   }
   
   return response.json();

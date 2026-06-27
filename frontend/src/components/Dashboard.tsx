@@ -68,7 +68,8 @@ import {
   CheckmarkCircle20Regular,
   ArrowUpload20Regular,
   Add20Regular,
-  WindowConsole20Regular
+  WindowConsole20Regular,
+  Delete20Regular
 } from '@fluentui/react-icons';
 import { apiFetch, getBackendPort } from '../utils/api';
 import { openSectionWindow } from '../utils/windowManager';
@@ -338,6 +339,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
   const isResizing = useRef(false);
   
   const [resources, setResources] = useState<ResourceItem[]>([]);
+  const [visibleCount, setVisibleCount] = useState(100);
   const [metrics, setMetrics] = useState<Record<string, any>>({});
   const [crds, setCrds] = useState<CRD[]>([]);
   const [namespaces, setNamespaces] = useState<string[]>([]);
@@ -349,6 +351,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
   const [detailTab, setDetailTab] = useState('overview');
   const [detailPods, setDetailPods] = useState<ResourceItem[]>([]);
   const [detailEvents, setDetailEvents] = useState<any[]>([]);
+  const [activePortForwards, setActivePortForwards] = useState<any[]>([]);
   
   const eventSourceRef = useRef<EventSource | null>(null);
   const [isReachable, setIsReachable] = useState<boolean>(true);
@@ -405,10 +408,105 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
       }
   }
 
+  const loadActivePortForwards = async () => {
+    if (!context) return;
+    try {
+      const data = await apiFetch<any[]>(`/api/portforward/active?context_name=${context}`);
+      setActivePortForwards(data);
+    } catch (e) {
+      console.error("Failed to load active port forwards", e);
+    }
+  };
+
+  const handleDeleteResource = async (ns: string | undefined, name: string, type: string) => {
+    if (!window.confirm(`Are you sure you want to delete ${type} "${name}"?`)) return;
+    try {
+      const resourceNamespace = ns || 'none';
+      const targetType = type === 'other_replicasets' ? 'replicasets' : type === 'other_jobs' ? 'jobs' : type === 'other_services' ? 'services' : type === 'other_ingresses' ? 'ingresses' : type;
+      await apiFetch(`/api/resources/${context}/${targetType}/${resourceNamespace}/${name}`, {
+          method: 'DELETE'
+      });
+      alert(`Successfully deleted ${name}`);
+      loadData();
+      if (selectedResource && selectedResource.name === name && selectedResource.namespace === ns) {
+          setSelectedResource(null);
+          setResourceDetail(null);
+      }
+    } catch (e: any) {
+      alert(`Failed to delete resource: ${e.message || e}`);
+    }
+  };
+
+  const handleRedeploy = async (ns: string | undefined, name: string) => {
+    if (!window.confirm(`Are you sure you want to trigger a redeploy (rollout restart) for "${name}"?`)) return;
+    try {
+      await apiFetch(`/api/resources/${context}/deployments/${ns || 'default'}/${name}/redeploy`, {
+          method: 'POST'
+      });
+      alert(`Redeployment triggered successfully for ${name}`);
+      loadData();
+    } catch (e: any) {
+      alert(`Failed to trigger redeploy: ${e.message || e}`);
+    }
+  };
+
+  const handleStartPortForward = async (ns: string | undefined, name: string, defaultPortStr: string | undefined) => {
+    let servicePort = 80;
+    if (defaultPortStr) {
+      const cleanPort = defaultPortStr.split('/')[0];
+      const parsed = parseInt(cleanPort.split(':')[0]);
+      if (!isNaN(parsed)) servicePort = parsed;
+    }
+
+    const portPrompt = window.prompt(
+      `Enter local port to forward to service port ${servicePort} (leave empty to automatically allocate a free port):`
+    );
+    if (portPrompt === null) return; // User cancelled
+
+    const localPort = portPrompt.trim() ? parseInt(portPrompt.trim()) : null;
+    if (localPort !== null && isNaN(localPort)) {
+        alert("Invalid local port number");
+        return;
+    }
+
+    try {
+      const res: any = await apiFetch(`/api/portforward/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          context_name: context,
+          namespace: ns || 'default',
+          service_name: name,
+          service_port: servicePort,
+          local_port: localPort
+        })
+      });
+      if (res.success) {
+        alert(`Successfully started port forward on local port: ${res.local_port}`);
+        loadActivePortForwards();
+      }
+    } catch (e: any) {
+      alert(`Failed to start port forward: ${e.message || e}`);
+    }
+  };
+
+  const handleStopPortForward = async (ns: string | undefined, name: string) => {
+    try {
+      await apiFetch(`/api/portforward/stop?context_name=${context}&namespace=${ns || 'default'}&service_name=${name}`, {
+        method: 'POST'
+      });
+      alert(`Stopped port forward for ${name}`);
+      loadActivePortForwards();
+    } catch (e: any) {
+      alert(`Failed to stop port forward: ${e.message || e}`);
+    }
+  };
+
   const loadData = async () => {
     if (!context) return;
     setLoading(true);
     try {
+      loadActivePortForwards();
       if (activeView === 'overview') {
         const data = await apiFetch<any>(`/api/resources/${context}/overview`);
         setOverview(data);
@@ -479,6 +577,8 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
       if (!selectedResource || !context) return;
       setLoading(true);
       setResourceDetail(null);
+      setDetailPods([]);
+      setDetailEvents([]);
       try {
           const type = selectedResource.type;
           const name = selectedResource.name;
@@ -514,7 +614,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                   const data = await apiFetch<ResourceDetail>(endpoint);
                   setResourceDetail(data);
 
-                  if ((type === 'deployments' || type === 'statefulsets' || type === 'daemonsets') && data.spec?.selector) {
+                  if ((type === 'deployments' || type === 'statefulsets' || type === 'daemonsets' || type === 'replicasets' || type === 'other_replicasets' || type === 'jobs' || type === 'other_jobs') && data.spec?.selector) {
                       const selector = Object.entries(data.spec.selector).map(([k, v]) => `${k}=${v}`).join(',');
                       const podsData = await apiFetch<{ items: ResourceItem[] }>(`/api/resources/${context}/pods/selector/${ns}?label_selector=${encodeURIComponent(selector)}`);
                       setDetailPods(podsData.items);
@@ -757,6 +857,23 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
     });
   }, [resources, search, sortState, selectedNamespaces]);
 
+  const visibleResources = useMemo(() => {
+    return sortedAndFilteredResources.slice(0, visibleCount);
+  }, [sortedAndFilteredResources, visibleCount]);
+
+  useEffect(() => {
+    setVisibleCount(100);
+  }, [activeView, selectedNamespaces, search, context]);
+
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const target = e.currentTarget;
+    if (target.scrollHeight - target.scrollTop <= target.clientHeight + 100) {
+      if (visibleCount < sortedAndFilteredResources.length) {
+        setVisibleCount(prev => prev + 100);
+      }
+    }
+  };
+
   const toggleSort = (columnId: string) => {
     setSortState(prev => ({
         columnId,
@@ -808,10 +925,22 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
         ];
       case 'deployments':
       case 'statefulsets':
+      case 'replicasets':
+      case 'other_replicasets':
         return [
           ...common,
           sortableHeader('replicas', 'Replicas'),
           sortableHeader('ready_replicas', 'Ready'),
+          <TableHeaderCell key="actions" style={{ width: '40px' }}></TableHeaderCell>
+        ];
+      case 'jobs':
+      case 'other_jobs':
+        return [
+          ...common,
+          sortableHeader('completions', 'Completions'),
+          sortableHeader('active', 'Active'),
+          sortableHeader('succeeded', 'Succeeded'),
+          sortableHeader('failed', 'Failed'),
           <TableHeaderCell key="actions" style={{ width: '40px' }}></TableHeaderCell>
         ];
       case 'daemonsets':
@@ -827,6 +956,22 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
           sortableHeader('schedule', 'Schedule'),
           sortableHeader('active', 'Active'),
           sortableHeader('last_schedule', 'Last Run'),
+          <TableHeaderCell key="actions" style={{ width: '40px' }}></TableHeaderCell>
+        ];
+      case 'services':
+      case 'other_services':
+        return [
+          ...common,
+          sortableHeader('type', 'Type'),
+          sortableHeader('cluster_ip', 'Cluster IP'),
+          <TableHeaderCell key="ports">Ports</TableHeaderCell>,
+          <TableHeaderCell key="actions" style={{ width: '40px' }}></TableHeaderCell>
+        ];
+      case 'ingresses':
+      case 'other_ingresses':
+        return [
+          ...common,
+          <TableHeaderCell key="hosts">Hosts</TableHeaderCell>,
           <TableHeaderCell key="actions" style={{ width: '40px' }}></TableHeaderCell>
         ];
       default:
@@ -846,30 +991,44 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
     let cpu = 0;
     let mem = 0;
     
-    if (m.containers) {
-        m.containers.forEach((c: any) => {
-            const c_cpu = c.usage.cpu;
-            if (c_cpu.endsWith('n')) cpu += parseInt(c_cpu) / 1000000;
-            else if (c_cpu.endsWith('u')) cpu += parseInt(c_cpu) / 1000;
-            else cpu += parseInt(c_cpu) * 1000;
+    try {
+        if (m.containers && Array.isArray(m.containers)) {
+            m.containers.forEach((c: any) => {
+                if (c && c.usage) {
+                    const c_cpu = c.usage.cpu;
+                    if (c_cpu && typeof c_cpu === 'string') {
+                        if (c_cpu.endsWith('n')) cpu += parseInt(c_cpu) / 1000000;
+                        else if (c_cpu.endsWith('u')) cpu += parseInt(c_cpu) / 1000;
+                        else cpu += parseInt(c_cpu) * 1000;
+                    }
 
-            const c_mem = c.usage.memory;
-            if (c_mem.endsWith('Ki')) mem += parseInt(c_mem) * 1024;
-            else if (c_mem.endsWith('Mi')) mem += parseInt(c_mem) * 1024 * 1024;
-            else if (c_mem.endsWith('Gi')) mem += parseInt(c_mem) * 1024 * 1024 * 1024;
-            else mem += parseInt(c_mem);
-        });
-    } else if (m.usage) {
-        const n_cpu = m.usage.cpu;
-        if (n_cpu.endsWith('n')) cpu = parseInt(n_cpu) / 1000000;
-        else if (n_cpu.endsWith('u')) cpu = parseInt(n_cpu) / 1000;
-        else cpu = parseInt(n_cpu) * 1000;
+                    const c_mem = c.usage.memory;
+                    if (c_mem && typeof c_mem === 'string') {
+                        if (c_mem.endsWith('Ki')) mem += parseInt(c_mem) * 1024;
+                        else if (c_mem.endsWith('Mi')) mem += parseInt(c_mem) * 1024 * 1024;
+                        else if (c_mem.endsWith('Gi')) mem += parseInt(c_mem) * 1024 * 1024 * 1024;
+                        else mem += parseInt(c_mem);
+                    }
+                }
+            });
+        } else if (m.usage) {
+            const n_cpu = m.usage.cpu;
+            if (n_cpu && typeof n_cpu === 'string') {
+                if (n_cpu.endsWith('n')) cpu = parseInt(n_cpu) / 1000000;
+                else if (n_cpu.endsWith('u')) cpu = parseInt(n_cpu) / 1000;
+                else cpu = parseInt(n_cpu) * 1000;
+            }
 
-        const n_mem = m.usage.memory;
-        if (n_mem.endsWith('Ki')) mem = parseInt(n_mem) * 1024;
-        else if (n_mem.endsWith('Mi')) mem = parseInt(n_mem) * 1024 * 1024;
-        else if (n_mem.endsWith('Gi')) mem = parseInt(n_mem) * 1024 * 1024 * 1024;
-        else mem = parseInt(n_mem);
+            const n_mem = m.usage.memory;
+            if (n_mem && typeof n_mem === 'string') {
+                if (n_mem.endsWith('Ki')) mem = parseInt(n_mem) * 1024;
+                else if (n_mem.endsWith('Mi')) mem = parseInt(n_mem) * 1024 * 1024;
+                else if (n_mem.endsWith('Gi')) mem = parseInt(n_mem) * 1024 * 1024 * 1024;
+                else mem = parseInt(n_mem);
+            }
+        }
+    } catch (e) {
+        console.error("Error parsing metrics", e);
     }
 
     return {
@@ -898,7 +1057,22 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                             <MenuItem icon={<WindowConsole20Regular />} onClick={() => handleOpenShell(r.namespace!, r.name, r.raw?.spec?.containers[0]?.name || 'default')}>Execute Shell</MenuItem>
                             </>
                         )}
+                        {(activeView === 'deployments' || activeView === 'other_deployments') && (
+                            <MenuItem icon={<ArrowClockwise20Regular />} onClick={() => handleRedeploy(r.namespace, r.name)}>Redeploy</MenuItem>
+                        )}
+                        {(activeView === 'services' || activeView === 'other_services' || r.cluster_ip !== undefined) && (
+                            (() => {
+                                const isForwarded = activePortForwards.some(f => f.namespace === r.namespace && f.service_name === r.name);
+                                if (isForwarded) {
+                                    return <MenuItem icon={<Link20Regular />} onClick={() => handleStopPortForward(r.namespace, r.name)}>Stop Port Forward</MenuItem>;
+                                } else {
+                                    const defaultPort = r.ports?.[0];
+                                    return <MenuItem icon={<Link20Regular />} onClick={() => handleStartPortForward(r.namespace, r.name, defaultPort)}>Start Port Forward</MenuItem>;
+                                }
+                            })()
+                        )}
                         <MenuItem icon={<Document20Regular />} onClick={() => handleOpenYaml(r.namespace || 'default', r.name)}>Edit YAML</MenuItem>
+                        <MenuItem icon={<Delete20Regular />} style={{ color: 'var(--colorPaletteRedForeground1)' }} onClick={() => handleDeleteResource(r.namespace, r.name, activeView)}>Delete</MenuItem>
                     </MenuList>
                 </MenuPopover>
             </Menu>
@@ -955,11 +1129,25 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
             );
         case 'deployments':
         case 'statefulsets':
+        case 'replicasets':
+        case 'other_replicasets':
             return (
                 <TableRow key={`${r.namespace}-${r.name}`}>
                     {commonCells}
-                    <TableCell>{r.replicas}</TableCell>
-                    <TableCell><Badge color={r.ready_replicas === r.replicas ? 'success' : 'warning'}>{r.ready_replicas}</Badge></TableCell>
+                    <TableCell>{r.replicas ?? 0}</TableCell>
+                    <TableCell><Badge color={(r.ready_replicas ?? 0) === (r.replicas ?? 0) ? 'success' : 'warning'}>{r.ready_replicas ?? 0}</Badge></TableCell>
+                    {actions}
+                </TableRow>
+            );
+        case 'jobs':
+        case 'other_jobs':
+            return (
+                <TableRow key={`${r.namespace}-${r.name}`}>
+                    {commonCells}
+                    <TableCell>{r.completions ?? 0}</TableCell>
+                    <TableCell>{r.active ?? 0}</TableCell>
+                    <TableCell><Badge color="success">{r.succeeded ?? 0}</Badge></TableCell>
+                    <TableCell><Badge color={(r.failed ?? 0) > 0 ? 'important' : 'subtle'}>{r.failed ?? 0}</Badge></TableCell>
                     {actions}
                 </TableRow>
             );
@@ -979,6 +1167,56 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                     <TableCell><code>{r.schedule}</code></TableCell>
                     <TableCell><Badge appearance="outline">{r.active}</Badge></TableCell>
                     <TableCell><span style={{ fontSize: '0.8rem', opacity: 0.8 }}>{r.last_schedule ? new Date(r.last_schedule).toLocaleString() : 'Never'}</span></TableCell>
+                    {actions}
+                </TableRow>
+            );
+        case 'services':
+        case 'other_services':
+            {
+                const forward = activePortForwards.find(f => f.namespace === r.namespace && f.service_name === r.name);
+                return (
+                    <TableRow key={`${r.namespace}-${r.name}`}>
+                        <TableCell>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                <span className={styles.clickableName} onClick={() => setSelectedResource({ type: 'services', name: r.name, namespace: r.namespace })}>{r.name}</span>
+                                {forward && (
+                                    <span style={{ fontSize: '0.75rem', color: 'var(--colorPaletteGreenForeground1)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                        <Link20Regular style={{ width: '12px', height: '12px' }} />
+                                        Port Forward: 127.0.0.1:{forward.local_port} &rarr; {forward.service_port}
+                                    </span>
+                                )}
+                            </div>
+                        </TableCell>
+                        <TableCell><Badge appearance="tint" color="brand">{r.namespace || 'Cluster'}</Badge></TableCell>
+                        <TableCell>{r.type}</TableCell>
+                        <TableCell><code>{r.cluster_ip}</code></TableCell>
+                        <TableCell>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px' }}>
+                                {r.ports?.map((p: string, idx: number) => (
+                                    <Badge key={idx} appearance="outline">{p}</Badge>
+                                ))}
+                            </div>
+                        </TableCell>
+                        {actions}
+                    </TableRow>
+                );
+            }
+        case 'ingresses':
+        case 'other_ingresses':
+            return (
+                <TableRow key={`${r.namespace}-${r.name}`}>
+                    {commonCells}
+                    <TableCell>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px' }}>
+                            {r.hosts && r.hosts.length > 0 ? (
+                                r.hosts.map((h: string, idx: number) => (
+                                    <Badge key={idx} appearance="outline">{h || '*'}</Badge>
+                                ))
+                            ) : (
+                                <span style={{ opacity: 0.5 }}>*</span>
+                            )}
+                        </div>
+                    </TableCell>
                     {actions}
                 </TableRow>
             );
@@ -1359,7 +1597,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
             </div>
           </header>
 
-          <div className={styles.content}>
+          <div className={styles.content} onScroll={handleScroll}>
             {!context ? (
                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', opacity: 0.5, gap: '1rem' }}>
                   <Mascot />
@@ -1390,97 +1628,240 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                     <div className={styles.detailView}>
                         <TabList size="small" selectedValue={detailTab} onTabSelect={(_, data) => setDetailTab(data.value as string)}>
                             <Tab value="overview">Overview</Tab>
-                            {(selectedResource.type === 'nodes' || selectedResource.type === 'deployments' || selectedResource.type === 'statefulsets' || selectedResource.type === 'daemonsets') && <Tab value="pods">Pods ({detailPods.length})</Tab>}
                             <Tab value="events">Events ({detailEvents.length})</Tab>
                             {selectedResource.type === 'nodes' && <Tab value="images">Images</Tab>}
                         </TabList>
 
                         {detailTab === 'overview' && (
                             <div className={styles.detailSection}>
-                                <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)' }}>
-                                    <CardHeader header={<Subtitle2>Metadata</Subtitle2>} />
-                                    <div className={styles.kvTable} style={{ padding: '1rem' }}>
-                                        <span>Name</span> <span>{resourceDetail.metadata.name}</span>
-                                        {resourceDetail.metadata.namespace && <><span>Namespace</span> <span>{resourceDetail.metadata.namespace}</span></>}
-                                        <span>Age</span> <span>{new Date(resourceDetail.metadata.creation_timestamp).toLocaleString()}</span>
-                                        <span>Labels</span> 
-                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
-                                            {Object.entries(resourceDetail.metadata.labels || {}).map(([k, v]) => (
-                                                <Badge key={k} appearance="outline">{k}: {v as string}</Badge>
-                                            ))}
-                                        </div>
-                                    </div>
-                                </Card>
-
-                                {selectedResource.type === 'nodes' && (
-                                    <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)' }}>
-                                        <CardHeader header={<Subtitle2>Conditions</Subtitle2>} />
-                                        <div className={styles.kvTable} style={{ padding: '1rem' }}>
-                                            {resourceDetail.status.conditions?.map((c: any) => (
-                                                <div key={c.type} style={{ display: 'contents' }}>
-                                                    <span>{c.type}</span>
-                                                    <Badge color={c.status === 'True' ? (c.type === 'Ready' ? 'success' : 'important') : (c.type === 'Ready' ? 'important' : 'success')}>
-                                                        {c.status}
+                                <div style={{ 
+                                    display: 'grid', 
+                                    gridTemplateColumns: ['nodes', 'deployments', 'statefulsets', 'daemonsets', 'namespaces', 'services', 'other_services', 'ingresses', 'other_ingresses', 'replicasets', 'other_replicasets', 'jobs', 'other_jobs', 'cronjobs', 'pods'].includes(selectedResource.type) || selectedResource.type.startsWith('custom_') ? '1fr 1fr' : '1fr', 
+                                    gap: '1rem', 
+                                    alignItems: 'stretch',
+                                    marginBottom: '1rem'
+                                }}>
+                                    <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)', height: '100%' }}>
+                                        <CardHeader header={<Subtitle2>Metadata</Subtitle2>} />
+                                        <div style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                            <div style={{ fontSize: '1rem', fontWeight: 'bold', wordBreak: 'break-all' }}>
+                                                {resourceDetail.metadata.name}
+                                            </div>
+                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '4px' }}>
+                                                {resourceDetail.metadata.namespace && (
+                                                    <Badge appearance="tint" color="brand">
+                                                        Namespace: {resourceDetail.metadata.namespace}
                                                     </Badge>
+                                                )}
+                                                <Badge appearance="tint" color="subtle">
+                                                    Age: {new Date(resourceDetail.metadata.creation_timestamp).toLocaleString()}
+                                                </Badge>
+                                            </div>
+                                            {resourceDetail.metadata.labels && Object.keys(resourceDetail.metadata.labels).length > 0 && (
+                                                <div style={{ marginTop: '8px' }}>
+                                                    <div style={{ fontSize: '0.75rem', opacity: 0.6, marginBottom: '4px' }}>Labels</div>
+                                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                                                        {Object.entries(resourceDetail.metadata.labels).map(([k, v]) => (
+                                                            <Badge key={k} appearance="outline" style={{ fontSize: '0.7rem' }}>{k}: {v as string}</Badge>
+                                                        ))}
+                                                    </div>
                                                 </div>
-                                            ))}
-                                        </div>
-                                    </Card>
-                                )}
-
-                                {(selectedResource.type === 'deployments' || selectedResource.type === 'statefulsets' || selectedResource.type === 'daemonsets') && resourceDetail.status && (
-                                    <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)' }}>
-                                        <CardHeader header={<Subtitle2>Status</Subtitle2>} />
-                                        <div className={styles.kvTable} style={{ padding: '1rem' }}>
-                                            {selectedResource.type === 'daemonsets' ? (
-                                                <>
-                                                <span>Ready</span> <span>{resourceDetail.status.number_ready} / {resourceDetail.status.desired_number_scheduled}</span>
-                                                </>
-                                            ) : (
-                                                <>
-                                                <span>Replicas</span> <span>{resourceDetail.status.ready_replicas} Ready / {resourceDetail.status.replicas} Desired</span>
-                                                </>
                                             )}
-                                            {resourceDetail.status.conditions?.map((c: any) => (
-                                                <div key={c.type} style={{ display: 'contents' }}>
-                                                    <span>{c.type}</span>
-                                                    <Badge color={c.status === 'True' ? 'success' : 'important'}>{c.status}</Badge>
+                                        </div>
+                                    </Card>
+
+                                    {selectedResource.type === 'nodes' && (
+                                        <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)', height: '100%' }}>
+                                            <CardHeader header={<Subtitle2>Conditions</Subtitle2>} />
+                                            <div style={{ padding: '1rem', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                                                {resourceDetail.status.conditions?.map((c: any) => {
+                                                    const isOk = c.type === 'Ready' ? c.status === 'True' : c.status === 'False';
+                                                    return (
+                                                        <Badge key={c.type} color={isOk ? 'success' : 'important'} appearance="tint">
+                                                            {c.type}: {c.status}
+                                                        </Badge>
+                                                    );
+                                                })}
+                                            </div>
+                                        </Card>
+                                    )}
+
+                                    {(selectedResource.type === 'deployments' || selectedResource.type === 'statefulsets' || selectedResource.type === 'daemonsets') && resourceDetail.status && (
+                                        <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)', height: '100%' }}>
+                                            <CardHeader header={<Subtitle2>Status</Subtitle2>} />
+                                            <div style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                                <div>
+                                                    {selectedResource.type === 'daemonsets' ? (
+                                                        <Badge appearance="tint" color="brand" style={{ fontSize: '0.85rem', padding: '6px 10px' }}>
+                                                            Ready: {resourceDetail.status.number_ready} / {resourceDetail.status.desired_number_scheduled}
+                                                        </Badge>
+                                                    ) : (
+                                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                                                            <Badge appearance="tint" color="success">Ready: {resourceDetail.status.ready_replicas ?? 0}</Badge>
+                                                            <Badge appearance="tint" color="brand">Current: {resourceDetail.status.replicas ?? 0}</Badge>
+                                                            <Badge appearance="tint" color="subtle">Desired: {resourceDetail.spec?.replicas ?? 1}</Badge>
+                                                        </div>
+                                                    )}
                                                 </div>
+                                                {resourceDetail.status.conditions && resourceDetail.status.conditions.length > 0 && (
+                                                    <div style={{ marginTop: '4px' }}>
+                                                        <div style={{ fontSize: '0.75rem', opacity: 0.6, marginBottom: '4px' }}>Conditions</div>
+                                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                                                            {resourceDetail.status.conditions.map((c: any) => (
+                                                                <Badge key={c.type} color={c.status === 'True' ? 'success' : 'important'} appearance="outline">
+                                                                    {c.type}
+                                                                </Badge>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </Card>
+                                    )}
+
+                                    {selectedResource.type === 'namespaces' && resourceDetail.status && (
+                                        <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)', height: '100%' }}>
+                                            <CardHeader header={<Subtitle2>Status</Subtitle2>} />
+                                            <div style={{ padding: '1rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                <span style={{ fontSize: '0.9rem', opacity: 0.7 }}>Phase:</span>
+                                                <Badge color={resourceDetail.status.phase === 'Active' ? 'success' : 'important'} size="large">
+                                                    {resourceDetail.status.phase}
+                                                </Badge>
+                                            </div>
+                                        </Card>
+                                    )}
+
+                                    {(selectedResource.type === 'services' || selectedResource.type === 'other_services') && resourceDetail.spec && (
+                                        <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)', height: '100%' }}>
+                                            <CardHeader header={<Subtitle2>Service Details</Subtitle2>} />
+                                            <div style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                                <div>
+                                                    <span style={{ fontSize: '0.85rem', opacity: 0.6 }}>Type: </span>
+                                                    <Badge appearance="tint" color="brand">{resourceDetail.spec.type}</Badge>
+                                                </div>
+                                                <div>
+                                                    <span style={{ fontSize: '0.85rem', opacity: 0.6 }}>Cluster IP: </span>
+                                                    <code>{resourceDetail.spec.cluster_ip}</code>
+                                                </div>
+                                                {resourceDetail.spec.ports && resourceDetail.spec.ports.length > 0 && (
+                                                    <div>
+                                                        <div style={{ fontSize: '0.75rem', opacity: 0.6, marginBottom: '4px' }}>Ports</div>
+                                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                                                            {resourceDetail.spec.ports.map((p: any, idx: number) => (
+                                                                <Badge key={idx} appearance="outline" style={{ fontSize: '0.75rem' }}>{p.port}:{p.targetPort || p.target_port}/{p.protocol}</Badge>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </Card>
+                                    )}
+
+                                    {(selectedResource.type === 'ingresses' || selectedResource.type === 'other_ingresses') && resourceDetail.spec && (
+                                        <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)', height: '100%' }}>
+                                            <CardHeader header={<Subtitle2>Ingress Rules</Subtitle2>} />
+                                            <div style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '8px', overflowY: 'auto', maxHeight: '180px' }}>
+                                                {resourceDetail.spec.rules?.map((rule: any, idx: number) => (
+                                                    <div key={idx} style={{ borderBottom: rule.http?.paths?.length > 1 ? '1px solid var(--colorNeutralStroke2)' : 'none', paddingBottom: '4px' }}>
+                                                        <div style={{ fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '2px' }}>Host: {rule.host || '*'}</div>
+                                                        {rule.http?.paths?.map((path: any, pIdx: number) => (
+                                                            <div key={pIdx} style={{ fontSize: '0.75rem', opacity: 0.8 }}>
+                                                                <code>{path.path || '/'}</code> &rarr; <code>{path.backend?.service?.name || path.backend?.serviceName}</code>:{path.backend?.service?.port?.number || path.backend?.servicePort}
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </Card>
+                                    )}
+
+                                    {(selectedResource.type === 'replicasets' || selectedResource.type === 'other_replicasets') && resourceDetail.status && (
+                                        <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)', height: '100%' }}>
+                                            <CardHeader header={<Subtitle2>ReplicaSet Status</Subtitle2>} />
+                                            <div style={{ padding: '1rem', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                                                <Badge appearance="tint" color="subtle">Desired: {resourceDetail.spec?.replicas}</Badge>
+                                                <Badge appearance="tint" color="brand">Current: {resourceDetail.status.replicas}</Badge>
+                                                <Badge color={(resourceDetail.status.ready_replicas ?? 0) === (resourceDetail.spec?.replicas ?? 0) ? 'success' : 'warning'} appearance="tint">Ready: {resourceDetail.status.ready_replicas ?? 0}</Badge>
+                                                <Badge appearance="tint" color="subtle">Available: {resourceDetail.status.available_replicas ?? 0}</Badge>
+                                            </div>
+                                        </Card>
+                                    )}
+
+                                    {(selectedResource.type === 'jobs' || selectedResource.type === 'other_jobs') && resourceDetail.status && (
+                                        <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)', height: '100%' }}>
+                                            <CardHeader header={<Subtitle2>Job Status</Subtitle2>} />
+                                            <div style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                                                    <Badge appearance="tint">Completions: {resourceDetail.spec?.completions}</Badge>
+                                                    <Badge appearance="tint">Parallelism: {resourceDetail.spec?.parallelism}</Badge>
+                                                    <Badge appearance="tint" color="brand">Active: {resourceDetail.status.active}</Badge>
+                                                    <Badge color="success" appearance="tint">Succeeded: {resourceDetail.status.succeeded}</Badge>
+                                                    <Badge color={resourceDetail.status.failed > 0 ? 'important' : 'subtle'} appearance="tint">Failed: {resourceDetail.status.failed}</Badge>
+                                                </div>
+                                                <div style={{ fontSize: '0.75rem', opacity: 0.6 }}>
+                                                    {resourceDetail.status.start_time && <div>Started: {new Date(resourceDetail.status.start_time).toLocaleString()}</div>}
+                                                    {resourceDetail.status.completion_time && <div>Completed: {new Date(resourceDetail.status.completion_time).toLocaleString()}</div>}
+                                                </div>
+                                            </div>
+                                        </Card>
+                                    )}
+
+                                    {selectedResource.type === 'cronjobs' && resourceDetail.spec && (
+                                        <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)', height: '100%' }}>
+                                            <CardHeader header={<Subtitle2>CronJob Details</Subtitle2>} />
+                                            <div style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                                <div>Schedule: <code>{resourceDetail.spec.schedule}</code></div>
+                                                <div>Suspend: <Badge color={resourceDetail.spec.suspend ? 'warning' : 'success'}>{resourceDetail.spec.suspend ? 'Yes' : 'No'}</Badge></div>
+                                                <div style={{ fontSize: '0.75rem', opacity: 0.7 }}>Last Run: {resourceDetail.status.last_schedule_time ? new Date(resourceDetail.status.last_schedule_time).toLocaleString() : 'Never'}</div>
+                                            </div>
+                                        </Card>
+                                    )}
+
+                                    {selectedResource.type === 'pods' && resourceDetail.status && (
+                                        <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)', height: '100%' }}>
+                                            <CardHeader header={<Subtitle2>Pod Status</Subtitle2>} />
+                                            <div style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                    <span>Phase:</span>
+                                                    <Badge color={resourceDetail.status.phase === 'Running' ? 'success' : 'important'}>{resourceDetail.status.phase}</Badge>
+                                                </div>
+                                                <div>IP: <code>{resourceDetail.status.pod_ip || '---'}</code> (Host: <code>{resourceDetail.status.host_ip || '---'}</code>)</div>
+                                                <div>Node: <span className={styles.clickableName} onClick={() => setSelectedResource({ type: 'nodes', name: resourceDetail.spec.node_name })}>{resourceDetail.spec.node_name}</span></div>
+                                            </div>
+                                        </Card>
+                                    )}
+
+                                    {selectedResource.type.startsWith('custom_') && resourceDetail.spec && (
+                                        <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)', height: '100%' }}>
+                                            <CardHeader header={<Subtitle2>Spec Summary</Subtitle2>} />
+                                            <div style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '6px', overflowY: 'auto', maxHeight: '180px' }}>
+                                                {Object.entries(resourceDetail.spec || {}).slice(0, 10).map(([k, v]) => (
+                                                    <div key={k} style={{ fontSize: '0.75rem', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                                                        <strong>{k}:</strong> {typeof v === 'object' ? JSON.stringify(v) : String(v)}
+                                                    </div>
+                                                ))}
+                                                {Object.keys(resourceDetail.spec || {}).length > 10 && (
+                                                    <div style={{ fontSize: '0.7rem', opacity: 0.5 }}>+ {Object.keys(resourceDetail.spec).length - 10} more fields</div>
+                                                )}
+                                            </div>
+                                        </Card>
+                                    )}
+                                </div>
+
+                                {selectedResource.type === 'namespaces' && (
+                                    <>
+                                    <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)', marginBottom: '1rem' }}>
+                                        <CardHeader header={<Subtitle2>Resource Counts</Subtitle2>} />
+                                        <div style={{ padding: '1rem', display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                                            {Object.entries(resourceDetail.counts || {}).map(([k, v]) => (
+                                                <Badge key={k} appearance="tint" color="brand" style={{ padding: '6px 10px', fontSize: '0.8rem' }}>
+                                                    {k.charAt(0).toUpperCase() + k.slice(1)}: {v as number}
+                                                </Badge>
                                             ))}
                                         </div>
                                     </Card>
-                                )}
 
-                                {selectedResource.type === 'namespaces' && resourceDetail.status && (
-                                    <>
-                                    <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)' }}>
-                                        <CardHeader header={<Subtitle2>Status</Subtitle2>} />
-                                        <div className={styles.kvTable} style={{ padding: '1rem' }}>
-                                            <span>Phase</span> 
-                                            <Badge color={resourceDetail.status.phase === 'Active' ? 'success' : 'important'}>
-                                                {resourceDetail.status.phase}
-                                            </Badge>
-                                        </div>
-                                    </Card>
-
-                                    <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)' }}>
-                                        <CardHeader header={<Subtitle2>Resource Counts</Subtitle2>} />
-                                        <div className={styles.kvTable} style={{ padding: '1rem' }}>
-                                            <span>Deployments</span> <span>{resourceDetail.counts?.deployments ?? 0}</span>
-                                            <span>StatefulSets</span> <span>{resourceDetail.counts?.statefulsets ?? 0}</span>
-                                            <span>DaemonSets</span> <span>{resourceDetail.counts?.daemonsets ?? 0}</span>
-                                            <span>CronJobs</span> <span>{resourceDetail.counts?.cronjobs ?? 0}</span>
-                                            <span>Jobs</span> <span>{resourceDetail.counts?.jobs ?? 0}</span>
-                                            <span>Pods</span> <span>{resourceDetail.counts?.pods ?? 0}</span>
-                                            <span>Services</span> <span>{resourceDetail.counts?.services ?? 0}</span>
-                                            <span>Ingresses</span> <span>{resourceDetail.counts?.ingresses ?? 0}</span>
-                                            <span>ConfigMaps</span> <span>{resourceDetail.counts?.configmaps ?? 0}</span>
-                                            <span>Secrets</span> <span>{resourceDetail.counts?.secrets ?? 0}</span>
-                                            <span>PVCs</span> <span>{resourceDetail.counts?.pvcs ?? 0}</span>
-                                        </div>
-                                    </Card>
-
-                                    <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)' }}>
+                                    <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)', marginBottom: '1rem' }}>
                                         <CardHeader header={<Subtitle2>Resource Usage (Requests)</Subtitle2>} />
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1rem' }}>
                                             <div>
@@ -1522,157 +1903,21 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                                     </>
                                 )}
 
-                                {(selectedResource.type === 'services' || selectedResource.type === 'other_services') && resourceDetail.spec && (
-                                    <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)' }}>
-                                        <CardHeader header={<Subtitle2>Service Details</Subtitle2>} />
-                                        <div className={styles.kvTable} style={{ padding: '1rem' }}>
-                                            <span>Type</span> <span>{resourceDetail.spec.type}</span>
-                                            <span>Cluster IP</span> <code>{resourceDetail.spec.cluster_ip}</code>
-                                            <span>Ports</span> 
-                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
-                                                {resourceDetail.spec.ports?.map((p: any, idx: number) => (
-                                                    <Badge key={idx} appearance="outline">{p.port}:{p.targetPort || p.target_port}/{p.protocol}</Badge>
-                                                ))}
-                                            </div>
-                                            {resourceDetail.spec.selector && (
-                                                <>
-                                                <span>Selector</span>
-                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
-                                                    {Object.entries(resourceDetail.spec.selector).map(([k, v]) => (
-                                                        <Badge key={k} appearance="tint">{k}={v as string}</Badge>
-                                                    ))}
-                                                </div>
-                                                </>
-                                            )}
-                                        </div>
-                                    </Card>
-                                )}
-
-                                {(selectedResource.type === 'ingresses' || selectedResource.type === 'other_ingresses') && resourceDetail.spec && (
-                                    <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)' }}>
-                                        <CardHeader header={<Subtitle2>Ingress Rules</Subtitle2>} />
-                                        <div style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                            {resourceDetail.spec.rules?.map((rule: any, idx: number) => (
-                                                <div key={idx} style={{ borderBottom: '1px solid var(--colorNeutralStroke2)', paddingBottom: '8px' }}>
-                                                    <div style={{ fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Host: {rule.host || '*'}</div>
-                                                    <div className={styles.kvTable}>
-                                                        {rule.http?.paths?.map((path: any, pIdx: number) => (
-                                                            <div key={pIdx} style={{ display: 'contents' }}>
-                                                                <span>Path (<code>{path.path || '/'}</code>)</span>
-                                                                <span>
-                                                                    Service: <code>{path.backend?.service?.name || path.backend?.serviceName}</code> 
-                                                                    (Port: {path.backend?.service?.port?.number || path.backend?.servicePort})
-                                                                </span>
-                                                            </div>
-                                                        ))}
-                                                    </div>
-                                                </div>
+                                {(selectedResource.type === 'services' || selectedResource.type === 'other_services') && resourceDetail.spec?.selector && (
+                                    <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)', marginBottom: '1rem' }}>
+                                        <CardHeader header={<Subtitle2>Selector Labels</Subtitle2>} />
+                                        <div style={{ padding: '1rem', display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                                            {Object.entries(resourceDetail.spec.selector).map(([k, v]) => (
+                                                <Badge key={k} appearance="tint">{k}={v as string}</Badge>
                                             ))}
-                                        </div>
-                                    </Card>
-                                )}
-
-                                {(selectedResource.type === 'services' || selectedResource.type === 'other_services' || selectedResource.type === 'ingresses' || selectedResource.type === 'other_ingresses') && (
-                                     <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)', marginTop: '0.5rem' }}>
-                                        <CardHeader header={<Subtitle2>Selected Pods</Subtitle2>} />
-                                        <div style={{ padding: '1rem' }}>
-                                            {resourceDetail.pods && resourceDetail.pods.length > 0 ? (
-                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                                    {resourceDetail.pods.map((p: any) => (
-                                                        <div key={p.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--colorNeutralStroke3)', paddingBottom: '4px' }}>
-                                                            <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                                                <span 
-                                                                    className={styles.clickableName} 
-                                                                    onClick={() => setSelectedResource({ type: 'pods', name: p.name, namespace: p.namespace || selectedResource.namespace })}
-                                                                >
-                                                                    {p.name}
-                                                                </span>
-                                                                {p.service && <span style={{ fontSize: '0.75rem', opacity: 0.6 }}>via Service: {p.service}</span>}
-                                                            </div>
-                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                                                {p.ip && <code style={{ fontSize: '0.75rem' }}>{p.ip}</code>}
-                                                                <Badge color={p.status === 'Running' ? 'success' : 'warning'}>{p.status}</Badge>
-                                                            </div>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            ) : (
-                                                <div style={{ opacity: 0.5, fontSize: '0.85rem' }}>No pods currently selected.</div>
-                                            )}
-                                        </div>
-                                     </Card>
-                                )}
-
-                                {(selectedResource.type === 'replicasets' || selectedResource.type === 'other_replicasets') && resourceDetail.status && (
-                                    <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)' }}>
-                                        <CardHeader header={<Subtitle2>ReplicaSet Status</Subtitle2>} />
-                                        <div className={styles.kvTable} style={{ padding: '1rem' }}>
-                                            <span>Desired Replicas</span> <span>{resourceDetail.spec?.replicas}</span>
-                                            <span>Current Replicas</span> <span>{resourceDetail.status.replicas}</span>
-                                            <span>Ready Replicas</span> <Badge color={resourceDetail.status.ready_replicas === resourceDetail.spec?.replicas ? 'success' : 'warning'}>{resourceDetail.status.ready_replicas}</Badge>
-                                            <span>Available Replicas</span> <span>{resourceDetail.status.available_replicas}</span>
-                                        </div>
-                                    </Card>
-                                )}
-
-                                {(selectedResource.type === 'jobs' || selectedResource.type === 'other_jobs') && resourceDetail.status && (
-                                    <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)' }}>
-                                        <CardHeader header={<Subtitle2>Job Status</Subtitle2>} />
-                                        <div className={styles.kvTable} style={{ padding: '1rem' }}>
-                                            <span>Completions</span> <span>{resourceDetail.spec?.completions}</span>
-                                            <span>Parallelism</span> <span>{resourceDetail.spec?.parallelism}</span>
-                                            <span>Active</span> <span>{resourceDetail.status.active}</span>
-                                            <span>Succeeded</span> <Badge color="success">{resourceDetail.status.succeeded}</Badge>
-                                            <span>Failed</span> <Badge color={resourceDetail.status.failed > 0 ? 'important' : 'subtle'}>{resourceDetail.status.failed}</Badge>
-                                            {resourceDetail.status.start_time && <><span>Started</span> <span>{new Date(resourceDetail.status.start_time).toLocaleString()}</span></>}
-                                            {resourceDetail.status.completion_time && <><span>Completed</span> <span>{new Date(resourceDetail.status.completion_time).toLocaleString()}</span></>}
-                                        </div>
-                                    </Card>
-                                )}
-
-                                {selectedResource.type.startsWith('custom_') && resourceDetail.spec && (
-                                    <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)' }}>
-                                        <CardHeader header={<Subtitle2>Spec Summary</Subtitle2>} />
-                                        <div className={styles.kvTable} style={{ padding: '1rem' }}>
-                                            {Object.entries(resourceDetail.spec).map(([k, v]) => (
-                                                <div key={k} style={{ display: 'contents' }}>
-                                                    <span>{k}</span>
-                                                    <span style={{ wordBreak: 'break-all', fontSize: '0.85rem' }}>
-                                                        {typeof v === 'object' ? JSON.stringify(v) : String(v)}
-                                                    </span>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </Card>
-                                )}
-
-                                {selectedResource.type === 'cronjobs' && resourceDetail.spec && (
-                                    <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)' }}>
-                                        <CardHeader header={<Subtitle2>CronJob Status</Subtitle2>} />
-                                        <div className={styles.kvTable} style={{ padding: '1rem' }}>
-                                            <span>Schedule</span> <code>{resourceDetail.spec.schedule}</code>
-                                            <span>Suspend</span> <span>{resourceDetail.spec.suspend ? 'Yes' : 'No'}</span>
-                                            <span>Last Run</span> <span>{resourceDetail.status.last_schedule_time ? new Date(resourceDetail.status.last_schedule_time).toLocaleString() : 'Never'}</span>
                                         </div>
                                     </Card>
                                 )}
 
                                 {(selectedResource.type === 'pods' || selectedResource.type === 'deployments' || selectedResource.type === 'statefulsets' || selectedResource.type === 'daemonsets' || selectedResource.type === 'cronjobs') && resourceDetail.spec && (
                                     <>
-                                    {selectedResource.type === 'pods' && (
-                                        <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)' }}>
-                                            <CardHeader header={<Subtitle2>Pod Status</Subtitle2>} />
-                                            <div className={styles.kvTable} style={{ padding: '1rem' }}>
-                                                <span>Phase</span> <Badge color={resourceDetail.status.phase === 'Running' ? 'success' : 'important'}>{resourceDetail.status.phase}</Badge>
-                                                <span>Pod IP</span> <code>{resourceDetail.status.pod_ip}</code>
-                                                <span>Host IP</span> <code>{resourceDetail.status.host_ip}</code>
-                                                <span>Node</span> <span className={styles.clickableName} onClick={() => setSelectedResource({ type: 'nodes', name: resourceDetail.spec.node_name })}>{resourceDetail.spec.node_name}</span>
-                                            </div>
-                                        </Card>
-                                    )}
-
-                                    <Title3 style={{ fontSize: '1rem', marginTop: '1rem' }}>{selectedResource.type === 'pods' ? 'Containers' : 'Pod Template Containers'}</Title3>
-                                    {resourceDetail.spec.containers.map((c: any) => {
+                                    <Title3 style={{ fontSize: '1rem', marginTop: '1rem', marginBottom: '0.5rem', display: 'block' }}>{selectedResource.type === 'pods' ? 'Containers' : 'Pod Template Containers'}</Title3>
+                                    {resourceDetail.spec.containers?.map((c: any) => {
                                         const status = selectedResource.type === 'pods' ? resourceDetail.status.container_statuses?.find((s: any) => s.name === c.name) : null;
                                         return (
                                             <Card key={c.name} style={{ backgroundColor: 'var(--colorNeutralBackground2)', marginBottom: '0.5rem' }}>
@@ -1708,7 +1953,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                                                         {c.ports?.length > 0 && (
                                                             <>
                                                             <span>Ports</span>
-                                                            <div style={{ display: 'flex', gap: '4px' }}>
+                                                            <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
                                                                 {c.ports.map((p: any, idx: number) => (
                                                                     <Badge key={idx} appearance="outline">{p.container_port || p.containerPort}/{p.protocol}</Badge>
                                                                 ))}
@@ -1722,36 +1967,52 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                                     })}
                                     </>
                                 )}
-                            </div>
-                        )}
 
-                        {detailTab === 'pods' && (
-                            <div className={styles.tableCard}>
-                                <Table>
-                                    <TableHeader>
-                                        <TableRow style={{ backgroundColor: 'var(--colorNeutralBackground3)' }}>
-                                            <TableHeaderCell>Name</TableHeaderCell>
-                                            <TableHeaderCell>Namespace</TableHeaderCell>
-                                            <TableHeaderCell>Status</TableHeaderCell>
-                                            <TableHeaderCell>CPU</TableHeaderCell>
-                                            <TableHeaderCell>Memory</TableHeaderCell>
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                        {detailPods.map(p => {
-                                            const { cpu, mem } = getMetricValues(p);
-                                            return (
-                                                <TableRow key={p.name}>
-                                                    <TableCell><span className={styles.clickableName} onClick={() => setSelectedResource({ type: 'pods', name: p.name, namespace: p.namespace })}>{p.name}</span></TableCell>
-                                                    <TableCell><Badge appearance="tint">{p.namespace}</Badge></TableCell>
-                                                    <TableCell><Badge color={p.status === 'Running' ? 'success' : 'important'}>{p.status}</Badge></TableCell>
-                                                    <TableCell><span style={{ fontSize: '0.8rem' }}>{cpu}</span></TableCell>
-                                                    <TableCell><span style={{ fontSize: '0.8rem' }}>{mem}</span></TableCell>
-                                                </TableRow>
-                                            );
-                                        })}
-                                    </TableBody>
-                                </Table>
+                                {(selectedResource.type === 'nodes' || selectedResource.type === 'deployments' || selectedResource.type === 'statefulsets' || selectedResource.type === 'daemonsets' || selectedResource.type === 'replicasets' || selectedResource.type === 'other_replicasets' || selectedResource.type === 'jobs' || selectedResource.type === 'other_jobs' || selectedResource.type === 'services' || selectedResource.type === 'other_services' || selectedResource.type === 'ingresses' || selectedResource.type === 'other_ingresses') && (
+                                     <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)', marginTop: '1rem' }}>
+                                        <CardHeader header={<Subtitle2>Pods ({detailPods.length})</Subtitle2>} />
+                                        <div style={{ padding: '0.5rem 1rem 1rem 1rem' }}>
+                                            {detailPods && detailPods.length > 0 ? (
+                                                <Table size="extra-small">
+                                                    <TableHeader>
+                                                        <TableRow style={{ borderBottom: '1px solid var(--colorNeutralStroke3)' }}>
+                                                            <TableHeaderCell>Name</TableHeaderCell>
+                                                            <TableHeaderCell style={{ width: '80px' }}>Status</TableHeaderCell>
+                                                            <TableHeaderCell style={{ width: '70px' }}>CPU</TableHeaderCell>
+                                                            <TableHeaderCell style={{ width: '70px' }}>Memory</TableHeaderCell>
+                                                        </TableRow>
+                                                    </TableHeader>
+                                                    <TableBody>
+                                                        {detailPods.map(p => {
+                                                            const { cpu, mem } = getMetricValues(p);
+                                                            return (
+                                                                <TableRow key={p.name}>
+                                                                    <TableCell>
+                                                                        <span 
+                                                                            className={styles.clickableName} 
+                                                                            onClick={() => setSelectedResource({ type: 'pods', name: p.name, namespace: p.namespace || selectedResource.namespace })}
+                                                                        >
+                                                                            {p.name}
+                                                                        </span>
+                                                                    </TableCell>
+                                                                    <TableCell>
+                                                                        <Badge color={p.status === 'Running' ? 'success' : 'important'} appearance="outline">
+                                                                            {p.status?.toLowerCase()}
+                                                                        </Badge>
+                                                                    </TableCell>
+                                                                    <TableCell><span style={{ fontSize: '0.75rem' }}>{cpu}</span></TableCell>
+                                                                    <TableCell><span style={{ fontSize: '0.75rem' }}>{mem}</span></TableCell>
+                                                                </TableRow>
+                                                            );
+                                                        })}
+                                                    </TableBody>
+                                                </Table>
+                                            ) : (
+                                                <div style={{ opacity: 0.5, fontSize: '0.85rem', textAlign: 'center', padding: '1rem' }}>No pods found.</div>
+                                            )}
+                                        </div>
+                                     </Card>
+                                )}
                             </div>
                         )}
 
@@ -1908,7 +2169,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {sortedAndFilteredResources.map(renderResourceRow)}
+                    {visibleResources.map(renderResourceRow)}
                   </TableBody>
                 </Table>
                 {sortedAndFilteredResources.length === 0 && !loading && (

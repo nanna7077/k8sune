@@ -44,15 +44,36 @@ async def get_overview(context_name: str):
 
         def parse_cpu(cpu_str):
             if not cpu_str: return 0
-            if cpu_str.endswith('m'): return int(cpu_str[:-1])
-            return int(cpu_str) * 1000
+            cpu_str = str(cpu_str).strip()
+            if cpu_str.endswith('m'):
+                try:
+                    return int(cpu_str[:-1])
+                except:
+                    return 0
+            try:
+                return int(float(cpu_str) * 1000)
+            except:
+                return 0
 
         def parse_mem(mem_str):
             if not mem_str: return 0
-            if mem_str.endswith('Ki'): return int(mem_str[:-2]) * 1024
-            if mem_str.endswith('Mi'): return int(mem_str[:-2]) * 1024 * 1024
-            if mem_str.endswith('Gi'): return int(mem_str[:-2]) * 1024 * 1024 * 1024
-            return int(mem_str)
+            mem_str = str(mem_str).strip()
+            units = {
+                'K': 1024, 'M': 1024**2, 'G': 1024**3, 'T': 1024**4, 'P': 1024**5, 'E': 1024**6,
+                'Ki': 1024, 'Mi': 1024**2, 'Gi': 1024**3, 'Ti': 1024**4, 'Pi': 1024**5, 'Ei': 1024**6,
+                'k': 1000, 'm': 1000**2, 'g': 1000**3, 't': 1000**4, 'p': 1000**5, 'e': 1000**6,
+                'kb': 1000, 'mb': 1000**2, 'gb': 1000**3
+            }
+            for unit, multiplier in sorted(units.items(), key=lambda x: len(x[0]), reverse=True):
+                if mem_str.endswith(unit):
+                    try:
+                        return int(float(mem_str[:-len(unit)].strip()) * multiplier)
+                    except:
+                        pass
+            try:
+                return int(float(mem_str))
+            except:
+                return 0
 
         for n in nodes.items:
             # Architecture
@@ -209,7 +230,7 @@ async def get_deployments(context_name: str, namespace: str = None):
                 {
                     "name": d.metadata.name,
                     "namespace": d.metadata.namespace,
-                    "replicas": d.spec.replicas,
+                    "replicas": d.spec.replicas if d.spec.replicas is not None else 1,
                     "ready_replicas": d.status.ready_replicas or 0,
                     "creation_timestamp": d.metadata.creation_timestamp
                 } for d in items.items
@@ -343,8 +364,7 @@ async def get_generic_resources(context_name: str, group: str, version: str, plu
                 {
                     "name": i['metadata']['name'],
                     "namespace": i['metadata'].get('namespace'),
-                    "creation_timestamp": i['metadata']['creationTimestamp'],
-                    "raw": i 
+                    "creation_timestamp": i['metadata']['creationTimestamp']
                 } for i in items.get('items', [])
             ]
         }
@@ -363,14 +383,16 @@ async def get_deployment_details(context_name: str, namespace: str, name: str):
                 "labels": dep.metadata.labels, "creation_timestamp": dep.metadata.creation_timestamp
             },
             "spec": {
-                "replicas": dep.spec.replicas,
+                "replicas": dep.spec.replicas if dep.spec.replicas is not None else 1,
                 "selector": dep.spec.selector.match_labels,
                 "strategy": dep.spec.strategy.to_dict() if dep.spec.strategy else {},
                 "containers": [{"name": c.name, "image": c.image, "ports": [p.to_dict() for p in c.ports] if c.ports else []} for c in dep.spec.template.spec.containers]
             },
             "status": {
-                "replicas": dep.status.replicas, "ready_replicas": dep.status.ready_replicas or 0,
-                "available_replicas": dep.status.available_replicas or 0, "conditions": [{"type": c.type, "status": c.status, "reason": c.reason, "message": c.message} for c in dep.status.conditions]
+                "replicas": dep.status.replicas if dep.status.replicas is not None else 0,
+                "ready_replicas": dep.status.ready_replicas if dep.status.ready_replicas is not None else 0,
+                "available_replicas": dep.status.available_replicas if dep.status.available_replicas is not None else 0,
+                "conditions": [{"type": c.type, "status": c.status, "reason": c.reason, "message": c.message} for c in dep.status.conditions]
             }
         }
     except Exception as e:
@@ -385,10 +407,13 @@ async def get_statefulset_details(context_name: str, namespace: str, name: str):
         return {
             "metadata": {"name": obj.metadata.name, "namespace": obj.metadata.namespace, "labels": obj.metadata.labels, "creation_timestamp": obj.metadata.creation_timestamp},
             "spec": {
-                "replicas": obj.spec.replicas, "selector": obj.spec.selector.match_labels,
+                "replicas": obj.spec.replicas if obj.spec.replicas is not None else 1, "selector": obj.spec.selector.match_labels,
                 "containers": [{"name": c.name, "image": c.image, "ports": [p.to_dict() for p in c.ports] if c.ports else []} for c in obj.spec.template.spec.containers]
             },
-            "status": {"ready_replicas": obj.status.ready_replicas or 0, "replicas": obj.status.replicas}
+            "status": {
+                "ready_replicas": obj.status.ready_replicas if obj.status.ready_replicas is not None else 0,
+                "replicas": obj.status.replicas if obj.status.replicas is not None else 0
+            }
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -405,7 +430,10 @@ async def get_daemonset_details(context_name: str, namespace: str, name: str):
                 "selector": obj.spec.selector.match_labels,
                 "containers": [{"name": c.name, "image": c.image, "ports": [p.to_dict() for p in c.ports] if c.ports else []} for c in obj.spec.template.spec.containers]
             },
-            "status": {"desired_number_scheduled": obj.status.desired_number_scheduled, "number_ready": obj.status.number_ready}
+            "status": {
+                "desired_number_scheduled": obj.status.desired_number_scheduled if obj.status.desired_number_scheduled is not None else 0,
+                "number_ready": obj.status.number_ready if obj.status.number_ready is not None else 0
+            }
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -451,43 +479,84 @@ async def get_namespace_details(context_name: str, name: str):
         nodes_task = v1.list_node()
         ns_task = v1.read_namespace(name)
 
-        (
-            pods, deployments, statefulsets, daemonsets, cronjobs, jobs,
-            services, ingresses, configmaps, secrets, pvcs, nodes, ns
-        ) = await asyncio.gather(
+        results = await asyncio.gather(
             pods_task, deployments_task, statefulsets_task, daemonsets_task, cronjobs_task, jobs_task,
-            services_task, ingresses_task, configmaps_task, secrets_task, pvcs_task, nodes_task, ns_task
+            services_task, ingresses_task, configmaps_task, secrets_task, pvcs_task, nodes_task, ns_task,
+            return_exceptions=True
         )
 
         def parse_cpu(cpu_str):
             if not cpu_str: return 0
-            if cpu_str.endswith('m'): return int(cpu_str[:-1])
+            cpu_str = str(cpu_str).strip()
+            if cpu_str.endswith('m'):
+                try:
+                    return int(cpu_str[:-1])
+                except:
+                    return 0
             try:
-                return int(cpu_str) * 1000
+                return int(float(cpu_str) * 1000)
             except:
                 return 0
 
         def parse_mem(mem_str):
             if not mem_str: return 0
-            if mem_str.endswith('Ki'): return int(mem_str[:-2]) * 1024
-            if mem_str.endswith('Mi'): return int(mem_str[:-2]) * 1024 * 1024
-            if mem_str.endswith('Gi'): return int(mem_str[:-2]) * 1024 * 1024 * 1024
+            mem_str = str(mem_str).strip()
+            units = {
+                'K': 1024, 'M': 1024**2, 'G': 1024**3, 'T': 1024**4, 'P': 1024**5, 'E': 1024**6,
+                'Ki': 1024, 'Mi': 1024**2, 'Gi': 1024**3, 'Ti': 1024**4, 'Pi': 1024**5, 'Ei': 1024**6,
+                'k': 1000, 'm': 1000**2, 'g': 1000**3, 't': 1000**4, 'p': 1000**5, 'e': 1000**6,
+                'kb': 1000, 'mb': 1000**2, 'gb': 1000**3
+            }
+            for unit, multiplier in sorted(units.items(), key=lambda x: len(x[0]), reverse=True):
+                if mem_str.endswith(unit):
+                    try:
+                        return int(float(mem_str[:-len(unit)].strip()) * multiplier)
+                    except:
+                        pass
             try:
-                return int(mem_str)
+                return int(float(mem_str))
             except:
                 return 0
+
+        def get_items_list(res):
+            if isinstance(res, Exception):
+                return []
+            if hasattr(res, 'items') and res.items is not None:
+                return res.items
+            return []
+
+        (
+            pods_res, deployments_res, statefulsets_res, daemonsets_res, cronjobs_res, jobs_res,
+            services_res, ingresses_res, configmaps_res, secrets_res, pvcs_res, nodes_res, ns_res
+        ) = results
+
+        if isinstance(ns_res, Exception):
+            raise ns_res
+
+        pods_items = get_items_list(pods_res)
+        deployments_items = get_items_list(deployments_res)
+        statefulsets_items = get_items_list(statefulsets_res)
+        daemonsets_items = get_items_list(daemonsets_res)
+        cronjobs_items = get_items_list(cronjobs_res)
+        jobs_items = get_items_list(jobs_res)
+        services_items = get_items_list(services_res)
+        ingresses_items = get_items_list(ingresses_res)
+        configmaps_items = get_items_list(configmaps_res)
+        secrets_items = get_items_list(secrets_res)
+        pvcs_items = get_items_list(pvcs_res)
+        nodes_items = get_items_list(nodes_res)
 
         # Calculate cluster allocatable capacity
         cluster_allocatable_cpu = 0
         cluster_allocatable_mem = 0
-        for n in nodes.items:
+        for n in nodes_items:
             cluster_allocatable_cpu += parse_cpu(n.status.allocatable.get('cpu', '0'))
             cluster_allocatable_mem += parse_mem(n.status.allocatable.get('memory', '0'))
 
         # Calculate namespace usage (sum of requests from running pods)
         ns_reserved_cpu = 0
         ns_reserved_mem = 0
-        for p in pods.items:
+        for p in pods_items:
             if p.status.phase == "Running":
                 for c in p.spec.containers:
                     if c.resources and c.resources.requests:
@@ -497,20 +566,20 @@ async def get_namespace_details(context_name: str, name: str):
                             ns_reserved_mem += parse_mem(c.resources.requests['memory'])
 
         return {
-            "metadata": {"name": ns.metadata.name, "labels": ns.metadata.labels, "creation_timestamp": ns.metadata.creation_timestamp},
-            "status": {"phase": ns.status.phase},
+            "metadata": {"name": ns_res.metadata.name, "labels": ns_res.metadata.labels, "creation_timestamp": ns_res.metadata.creation_timestamp},
+            "status": {"phase": ns_res.status.phase},
             "counts": {
-                "pods": len(pods.items),
-                "deployments": len(deployments.items),
-                "statefulsets": len(statefulsets.items),
-                "daemonsets": len(daemonsets.items),
-                "cronjobs": len(cronjobs.items),
-                "jobs": len(jobs.items),
-                "services": len(services.items),
-                "ingresses": len(ingresses.items),
-                "configmaps": len(configmaps.items),
-                "secrets": len(secrets.items),
-                "pvcs": len(pvcs.items)
+                "pods": len(pods_items),
+                "deployments": len(deployments_items),
+                "statefulsets": len(statefulsets_items),
+                "daemonsets": len(daemonsets_items),
+                "cronjobs": len(cronjobs_items),
+                "jobs": len(jobs_items),
+                "services": len(services_items),
+                "ingresses": len(ingresses_items),
+                "configmaps": len(configmaps_items),
+                "secrets": len(secrets_items),
+                "pvcs": len(pvcs_items)
             },
             "usage": {
                 "cpu": {
@@ -538,26 +607,6 @@ async def get_node_details(context_name: str, node_name: str):
                 "conditions": [{"type": c.type, "status": c.status, "reason": c.reason, "message": c.message} for c in node.status.conditions],
                 "addresses": [{"type": a.type, "address": a.address} for a in node.status.addresses],
                 "images": [{"names": i.names, "size_bytes": i.size_bytes} for i in node.status.images[:20]]
-            }
-        }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-@router.get("/resources/{context_name}/pods/{namespace}/{pod_name}")
-async def get_pod_details(context_name: str, namespace: str, pod_name: str):
-    try:
-        client = await cluster_manager.get_client(context_name)
-        v1 = CoreV1Api(client)
-        pod = await v1.read_namespaced_pod(pod_name, namespace)
-        return {
-            "metadata": {"name": pod.metadata.name, "namespace": pod.metadata.namespace, "labels": pod.metadata.labels, "creation_timestamp": pod.metadata.creation_timestamp},
-            "spec": {
-                "node_name": pod.spec.node_name,
-                "containers": [{"name": c.name, "image": c.image, "ports": [p.to_dict() for p in c.ports] if c.ports else []} for c in pod.spec.containers]
-            },
-            "status": {
-                "phase": pod.status.phase, "pod_ip": pod.status.pod_ip, "host_ip": pod.status.host_ip,
-                "container_statuses": [{"name": s.name, "ready": s.ready, "restart_count": s.restart_count, "state": s.state.to_dict(), "image": s.image} for s in pod.status.container_statuses] if pod.status.container_statuses else []
             }
         }
     except Exception as e:
@@ -600,6 +649,42 @@ async def get_pods_by_selector(context_name: str, namespace: str, label_selector
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+@router.get("/resources/{context_name}/pods/watch")
+async def watch_pods(request: Request, context_name: str, namespace: str = None):
+    client = await cluster_manager.get_client(context_name)
+    v1 = CoreV1Api(client)
+    async def event_generator():
+        w = Watch()
+        func = v1.list_namespaced_pod if namespace else v1.list_pod_for_all_namespaces
+        args = [namespace] if namespace else []
+        async for event in w.stream(func, *args):
+            if await request.is_disconnected(): break
+            p = event['object']
+            data = {"type": event['type'], "object": {"name": p.metadata.name, "namespace": p.metadata.namespace, "status": p.status.phase, "ip": p.status.pod_ip, "node": p.spec.node_name}}
+            yield json.dumps(data)
+    return EventSourceResponse(event_generator())
+
+@router.get("/resources/{context_name}/pods/{namespace}/{pod_name}")
+async def get_pod_details(context_name: str, namespace: str, pod_name: str):
+    try:
+        client = await cluster_manager.get_client(context_name)
+        v1 = CoreV1Api(client)
+        pod = await v1.read_namespaced_pod(pod_name, namespace)
+        return {
+            "metadata": {"name": pod.metadata.name, "namespace": pod.metadata.namespace, "labels": pod.metadata.labels, "creation_timestamp": pod.metadata.creation_timestamp},
+            "spec": {
+                "node_name": pod.spec.node_name,
+                "containers": [{"name": c.name, "image": c.image, "ports": [p.to_dict() for p in c.ports] if c.ports else []} for c in pod.spec.containers]
+            },
+            "status": {
+                "phase": pod.status.phase, "pod_ip": pod.status.pod_ip, "host_ip": pod.status.host_ip,
+                "container_statuses": [{"name": s.name, "ready": s.ready, "restart_count": s.restart_count, "state": s.state.to_dict(), "image": s.image} for s in pod.status.container_statuses] if pod.status.container_statuses else []
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.get("/resources/{context_name}/statefulsets")
 async def get_statefulsets(context_name: str, namespace: str = None):
     try:
@@ -609,7 +694,7 @@ async def get_statefulsets(context_name: str, namespace: str = None):
             items = await apps_v1.list_namespaced_stateful_set(namespace)
         else:
             items = await apps_v1.list_stateful_set_for_all_namespaces()
-        return {"items": [{"name": i.metadata.name, "namespace": i.metadata.namespace, "replicas": i.spec.replicas, "ready_replicas": i.status.ready_replicas or 0, "creation_timestamp": i.metadata.creation_timestamp} for i in items.items]}
+        return {"items": [{"name": i.metadata.name, "namespace": i.metadata.namespace, "replicas": i.spec.replicas if i.spec.replicas is not None else 1, "ready_replicas": i.status.ready_replicas or 0, "creation_timestamp": i.metadata.creation_timestamp} for i in items.items]}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -622,7 +707,7 @@ async def get_daemonsets(context_name: str, namespace: str = None):
             items = await apps_v1.list_namespaced_daemon_set(namespace)
         else:
             items = await apps_v1.list_daemon_set_for_all_namespaces()
-        return {"items": [{"name": i.metadata.name, "namespace": i.metadata.namespace, "desired": i.status.desired_number_scheduled, "ready": i.status.number_ready, "creation_timestamp": i.metadata.creation_timestamp} for i in items.items]}
+        return {"items": [{"name": i.metadata.name, "namespace": i.metadata.namespace, "desired": i.status.desired_number_scheduled if i.status.desired_number_scheduled is not None else 0, "ready": i.status.number_ready if i.status.number_ready is not None else 0, "creation_timestamp": i.metadata.creation_timestamp} for i in items.items]}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -638,21 +723,6 @@ async def get_cronjobs(context_name: str, namespace: str = None):
         return {"items": [{"name": i.metadata.name, "namespace": i.metadata.namespace, "schedule": i.spec.schedule, "last_schedule": i.status.last_schedule_time, "active": len(i.status.active) if i.status.active else 0, "creation_timestamp": i.metadata.creation_timestamp} for i in items.items]}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-
-@router.get("/resources/{context_name}/pods/watch")
-async def watch_pods(request: Request, context_name: str, namespace: str = None):
-    client = await cluster_manager.get_client(context_name)
-    v1 = CoreV1Api(client)
-    async def event_generator():
-        w = Watch()
-        func = v1.list_namespaced_pod if namespace else v1.list_pod_for_all_namespaces
-        args = [namespace] if namespace else []
-        async for event in w.stream(func, *args):
-            if await request.is_disconnected(): break
-            p = event['object']
-            data = {"type": event['type'], "object": {"name": p.metadata.name, "namespace": p.metadata.namespace, "status": p.status.phase, "ip": p.status.pod_ip, "node": p.spec.node_name}}
-            yield json.dumps(data)
-    return EventSourceResponse(event_generator())
 
 @router.get("/resources/{context_name}/metrics/{resource_type}")
 async def get_metrics(context_name: str, resource_type: str, namespace: str = None, name: str = None):
@@ -693,12 +763,99 @@ async def get_metrics(context_name: str, resource_type: str, namespace: str = No
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@router.delete("/resources/{context_name}/pods/{namespace}/{pod_name}")
-async def delete_pod(context_name: str, namespace: str, pod_name: str):
+@router.delete("/resources/{context_name}/{resource_type}/{namespace}/{name}")
+async def delete_resource(context_name: str, resource_type: str, namespace: str, name: str):
     try:
         client = await cluster_manager.get_client(context_name)
-        v1 = CoreV1Api(client)
-        await v1.delete_namespaced_pod(pod_name, namespace)
+        
+        # normalize namespace
+        target_namespace = namespace
+        if namespace in ["none", "undefined", "null", "all"]:
+            target_namespace = None
+
+        if resource_type == "pods":
+            v1 = CoreV1Api(client)
+            await v1.delete_namespaced_pod(name, target_namespace)
+        elif resource_type == "deployments":
+            apps = AppsV1Api(client)
+            await apps.delete_namespaced_deployment(name, target_namespace)
+        elif resource_type == "statefulsets":
+            apps = AppsV1Api(client)
+            await apps.delete_namespaced_stateful_set(name, target_namespace)
+        elif resource_type == "daemonsets":
+            apps = AppsV1Api(client)
+            await apps.delete_namespaced_daemon_set(name, target_namespace)
+        elif resource_type in ["replicasets", "other_replicasets"]:
+            apps = AppsV1Api(client)
+            await apps.delete_namespaced_replica_set(name, target_namespace)
+        elif resource_type in ["jobs", "other_jobs"]:
+            batch = BatchV1Api(client)
+            await batch.delete_namespaced_job(name, target_namespace, propagation_policy="Background")
+        elif resource_type == "cronjobs":
+            batch = BatchV1Api(client)
+            await batch.delete_namespaced_cron_job(name, target_namespace)
+        elif resource_type in ["services", "other_services"]:
+            v1 = CoreV1Api(client)
+            await v1.delete_namespaced_service(name, target_namespace)
+        elif resource_type in ["ingresses", "other_ingresses"]:
+            net = NetworkingV1Api(client)
+            await net.delete_namespaced_ingress(name, target_namespace)
+        elif resource_type == "configmaps":
+            v1 = CoreV1Api(client)
+            await v1.delete_namespaced_config_map(name, target_namespace)
+        elif resource_type == "secrets":
+            v1 = CoreV1Api(client)
+            await v1.delete_namespaced_secret(name, target_namespace)
+        elif resource_type == "pvcs":
+            v1 = CoreV1Api(client)
+            await v1.delete_namespaced_persistent_volume_claim(name, target_namespace)
+        elif resource_type == "namespaces":
+            v1 = CoreV1Api(client)
+            await v1.delete_namespace(name)
+        elif resource_type == "nodes":
+            v1 = CoreV1Api(client)
+            await v1.delete_node(name)
+        elif resource_type.startswith("custom_"):
+            custom = CustomObjectsApi(client)
+            parts = resource_type.split("_")
+            if len(parts) >= 4:
+                group = parts[1]
+                version = parts[2]
+                plural = "_".join(parts[3:])
+                if target_namespace:
+                    await custom.delete_namespaced_custom_object(group, version, target_namespace, plural, name)
+                else:
+                    await custom.delete_cluster_custom_object(group, version, plural, name)
+            else:
+                raise HTTPException(status_code=400, detail=f"Invalid custom resource type format: {resource_type}")
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported resource type for deletion: {resource_type}")
+
+        return {"status": "ok"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+from datetime import datetime
+@router.post("/resources/{context_name}/deployments/{namespace}/{name}/redeploy")
+async def redeploy_deployment(context_name: str, namespace: str, name: str):
+    try:
+        client = await cluster_manager.get_client(context_name)
+        apps = AppsV1Api(client)
+        dep = await apps.read_namespaced_deployment(name, namespace)
+        
+        restarted_at = datetime.utcnow().isoformat() + "Z"
+        patch_body = {
+            "spec": {
+                "template": {
+                    "metadata": {
+                        "annotations": {
+                            "kubectl.kubernetes.io/restartedAt": restarted_at
+                        }
+                    }
+                }
+            }
+        }
+        await apps.patch_namespaced_deployment(name, namespace, patch_body)
         return {"status": "ok"}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -763,7 +920,7 @@ async def get_replicasets(context_name: str, namespace: str = None):
                 {
                     "name": i.metadata.name,
                     "namespace": i.metadata.namespace,
-                    "replicas": i.spec.replicas,
+                    "replicas": i.spec.replicas if i.spec.replicas is not None else 1,
                     "ready_replicas": i.status.ready_replicas or 0,
                     "creation_timestamp": i.metadata.creation_timestamp
                 } for i in items.items
@@ -786,6 +943,8 @@ async def get_jobs(context_name: str, namespace: str = None):
                 {
                     "name": i.metadata.name,
                     "namespace": i.metadata.namespace,
+                    "completions": i.spec.completions if i.spec.completions is not None else 1,
+                    "active": i.status.active or 0,
                     "succeeded": i.status.succeeded or 0,
                     "failed": i.status.failed or 0,
                     "creation_timestamp": i.metadata.creation_timestamp
@@ -892,7 +1051,7 @@ async def get_replicaset_details(context_name: str, namespace: str, name: str):
         return {
             "metadata": {"name": obj.metadata.name, "namespace": obj.metadata.namespace, "labels": obj.metadata.labels, "creation_timestamp": obj.metadata.creation_timestamp},
             "spec": {
-                "replicas": obj.spec.replicas,
+                "replicas": obj.spec.replicas if obj.spec.replicas is not None else 1,
                 "selector": obj.spec.selector.match_labels if obj.spec.selector else None
             },
             "status": {
@@ -916,7 +1075,8 @@ async def get_job_details(context_name: str, namespace: str, name: str):
             "spec": {
                 "completions": obj.spec.completions,
                 "parallelism": obj.spec.parallelism,
-                "backoff_limit": obj.spec.backoff_limit
+                "backoff_limit": obj.spec.backoff_limit,
+                "selector": obj.spec.selector.match_labels if obj.spec.selector else None
             },
             "status": {
                 "active": obj.status.active or 0,

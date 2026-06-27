@@ -10,6 +10,7 @@ from backend.api.logs import router as logs_router
 from backend.api.yaml_editor import router as yaml_router
 from backend.api.crds import router as crds_router
 from backend.api.terminal import router as terminal_router
+from backend.api.portforward import router as portforward_router, cleanup_all_portforwards
 from backend.cluster.manager import cluster_manager
 
 @asynccontextmanager
@@ -17,9 +18,11 @@ async def lifespan(app: FastAPI):
     # Attempt to load kubeconfig on startup
     await cluster_manager.load_kubeconfig()
     yield
-    # Cleanup logic (if any) could go here
+    # Cleanup active port forwards
+    cleanup_all_portforwards()
 
 app = FastAPI(title="k8sune Backend", lifespan=lifespan)
+app.include_router(portforward_router, prefix="/api")
 
 # Add CORS Middleware
 app.add_middleware(
