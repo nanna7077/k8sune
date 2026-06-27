@@ -38,7 +38,7 @@ function App() {
 
   if (section === 'logs' && context && pod) {
     return (
-      <FluentProvider theme={k8suneTheme}>
+      <FluentProvider theme={k8suneTheme} style={{ height: '100%' }}>
         <TitleBar title={`k8sune - Logs [${pod}]`} />
         <WindowResizer />
         <div style={{ paddingTop: '32px', height: '100%', width: '100%', boxSizing: 'border-box' }}>
@@ -50,7 +50,7 @@ function App() {
 
   if (section === 'yaml' && context && name && resourceType) {
     return (
-      <FluentProvider theme={k8suneTheme}>
+      <FluentProvider theme={k8suneTheme} style={{ height: '100%' }}>
         <TitleBar title={`k8sune - YAML [${name}]`} />
         <WindowResizer />
         <div style={{ paddingTop: '32px', height: '100%', width: '100%', boxSizing: 'border-box' }}>
@@ -61,7 +61,7 @@ function App() {
   }
 
   return (
-    <FluentProvider theme={k8suneTheme}>
+    <FluentProvider theme={k8suneTheme} style={{ height: '100%' }}>
        <TitleBar />
        <WindowResizer />
        <div style={{ paddingTop: '32px', height: '100%', width: '100%', boxSizing: 'border-box' }}>

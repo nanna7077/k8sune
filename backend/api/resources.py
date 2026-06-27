@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Query, Request
 from sse_starlette.sse import EventSourceResponse
 from backend.cluster.manager import cluster_manager
-from kubernetes_asyncio.client import CoreV1Api, AppsV1Api, CustomObjectsApi, VersionApi, BatchV1Api
+from kubernetes_asyncio.client import CoreV1Api, AppsV1Api, CustomObjectsApi, VersionApi, BatchV1Api, NetworkingV1Api
 from kubernetes_asyncio.watch import Watch
 import asyncio
 import json
@@ -427,6 +427,105 @@ async def get_cronjob_details(context_name: str, namespace: str, name: str):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+@router.get("/resources/{context_name}/namespaces/{name}")
+async def get_namespace_details(context_name: str, name: str):
+    try:
+        client = await cluster_manager.get_client(context_name)
+        v1 = CoreV1Api(client)
+        apps_v1 = AppsV1Api(client)
+        batch_v1 = BatchV1Api(client)
+        networking_v1 = NetworkingV1Api(client)
+        
+        # Gather all information in parallel to stay fast
+        pods_task = v1.list_namespaced_pod(name)
+        deployments_task = apps_v1.list_namespaced_deployment(name)
+        statefulsets_task = apps_v1.list_namespaced_stateful_set(name)
+        daemonsets_task = apps_v1.list_namespaced_daemon_set(name)
+        cronjobs_task = batch_v1.list_namespaced_cron_job(name)
+        jobs_task = batch_v1.list_namespaced_job(name)
+        services_task = v1.list_namespaced_service(name)
+        ingresses_task = networking_v1.list_namespaced_ingress(name)
+        configmaps_task = v1.list_namespaced_config_map(name)
+        secrets_task = v1.list_namespaced_secret(name)
+        pvcs_task = v1.list_namespaced_persistent_volume_claim(name)
+        nodes_task = v1.list_node()
+        ns_task = v1.read_namespace(name)
+
+        (
+            pods, deployments, statefulsets, daemonsets, cronjobs, jobs,
+            services, ingresses, configmaps, secrets, pvcs, nodes, ns
+        ) = await asyncio.gather(
+            pods_task, deployments_task, statefulsets_task, daemonsets_task, cronjobs_task, jobs_task,
+            services_task, ingresses_task, configmaps_task, secrets_task, pvcs_task, nodes_task, ns_task
+        )
+
+        def parse_cpu(cpu_str):
+            if not cpu_str: return 0
+            if cpu_str.endswith('m'): return int(cpu_str[:-1])
+            try:
+                return int(cpu_str) * 1000
+            except:
+                return 0
+
+        def parse_mem(mem_str):
+            if not mem_str: return 0
+            if mem_str.endswith('Ki'): return int(mem_str[:-2]) * 1024
+            if mem_str.endswith('Mi'): return int(mem_str[:-2]) * 1024 * 1024
+            if mem_str.endswith('Gi'): return int(mem_str[:-2]) * 1024 * 1024 * 1024
+            try:
+                return int(mem_str)
+            except:
+                return 0
+
+        # Calculate cluster allocatable capacity
+        cluster_allocatable_cpu = 0
+        cluster_allocatable_mem = 0
+        for n in nodes.items:
+            cluster_allocatable_cpu += parse_cpu(n.status.allocatable.get('cpu', '0'))
+            cluster_allocatable_mem += parse_mem(n.status.allocatable.get('memory', '0'))
+
+        # Calculate namespace usage (sum of requests from running pods)
+        ns_reserved_cpu = 0
+        ns_reserved_mem = 0
+        for p in pods.items:
+            if p.status.phase == "Running":
+                for c in p.spec.containers:
+                    if c.resources and c.resources.requests:
+                        if 'cpu' in c.resources.requests:
+                            ns_reserved_cpu += parse_cpu(c.resources.requests['cpu'])
+                        if 'memory' in c.resources.requests:
+                            ns_reserved_mem += parse_mem(c.resources.requests['memory'])
+
+        return {
+            "metadata": {"name": ns.metadata.name, "labels": ns.metadata.labels, "creation_timestamp": ns.metadata.creation_timestamp},
+            "status": {"phase": ns.status.phase},
+            "counts": {
+                "pods": len(pods.items),
+                "deployments": len(deployments.items),
+                "statefulsets": len(statefulsets.items),
+                "daemonsets": len(daemonsets.items),
+                "cronjobs": len(cronjobs.items),
+                "jobs": len(jobs.items),
+                "services": len(services.items),
+                "ingresses": len(ingresses.items),
+                "configmaps": len(configmaps.items),
+                "secrets": len(secrets.items),
+                "pvcs": len(pvcs.items)
+            },
+            "usage": {
+                "cpu": {
+                    "reserved": ns_reserved_cpu,
+                    "cluster_allocatable": cluster_allocatable_cpu
+                },
+                "memory": {
+                    "reserved": ns_reserved_mem,
+                    "cluster_allocatable": cluster_allocatable_mem
+                }
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 @router.get("/resources/{context_name}/nodes/{node_name}")
 async def get_node_details(context_name: str, node_name: str):
     try:
@@ -601,5 +700,259 @@ async def delete_pod(context_name: str, namespace: str, pod_name: str):
         v1 = CoreV1Api(client)
         await v1.delete_namespaced_pod(pod_name, namespace)
         return {"status": "ok"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.get("/resources/{context_name}/services")
+async def get_services(context_name: str, namespace: str = None):
+    try:
+        client = await cluster_manager.get_client(context_name)
+        v1 = CoreV1Api(client)
+        if namespace:
+            items = await v1.list_namespaced_service(namespace)
+        else:
+            items = await v1.list_service_for_all_namespaces()
+        return {
+            "items": [
+                {
+                    "name": i.metadata.name,
+                    "namespace": i.metadata.namespace,
+                    "type": i.spec.type,
+                    "cluster_ip": i.spec.cluster_ip,
+                    "ports": [f"{p.port}:{p.target_port}/{p.protocol}" for p in i.spec.ports] if i.spec.ports else [],
+                    "creation_timestamp": i.metadata.creation_timestamp
+                } for i in items.items
+            ]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.get("/resources/{context_name}/ingresses")
+async def get_ingresses(context_name: str, namespace: str = None):
+    try:
+        client = await cluster_manager.get_client(context_name)
+        networking_v1 = NetworkingV1Api(client)
+        if namespace:
+            items = await networking_v1.list_namespaced_ingress(namespace)
+        else:
+            items = await networking_v1.list_ingress_for_all_namespaces()
+        return {
+            "items": [
+                {
+                    "name": i.metadata.name,
+                    "namespace": i.metadata.namespace,
+                    "hosts": [rule.host for rule in i.spec.rules] if i.spec.rules else [],
+                    "creation_timestamp": i.metadata.creation_timestamp
+                } for i in items.items
+            ]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.get("/resources/{context_name}/replicasets")
+async def get_replicasets(context_name: str, namespace: str = None):
+    try:
+        client = await cluster_manager.get_client(context_name)
+        apps_v1 = AppsV1Api(client)
+        if namespace:
+            items = await apps_v1.list_namespaced_replica_set(namespace)
+        else:
+            items = await apps_v1.list_replica_set_for_all_namespaces()
+        return {
+            "items": [
+                {
+                    "name": i.metadata.name,
+                    "namespace": i.metadata.namespace,
+                    "replicas": i.spec.replicas,
+                    "ready_replicas": i.status.ready_replicas or 0,
+                    "creation_timestamp": i.metadata.creation_timestamp
+                } for i in items.items
+            ]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.get("/resources/{context_name}/jobs")
+async def get_jobs(context_name: str, namespace: str = None):
+    try:
+        client = await cluster_manager.get_client(context_name)
+        batch_v1 = BatchV1Api(client)
+        if namespace:
+            items = await batch_v1.list_namespaced_job(namespace)
+        else:
+            items = await batch_v1.list_job_for_all_namespaces()
+        return {
+            "items": [
+                {
+                    "name": i.metadata.name,
+                    "namespace": i.metadata.namespace,
+                    "succeeded": i.status.succeeded or 0,
+                    "failed": i.status.failed or 0,
+                    "creation_timestamp": i.metadata.creation_timestamp
+                } for i in items.items
+            ]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.get("/resources/{context_name}/services/{namespace}/{name}")
+async def get_service_details(context_name: str, namespace: str, name: str):
+    try:
+        client = await cluster_manager.get_client(context_name)
+        v1 = CoreV1Api(client)
+        obj = await v1.read_namespaced_service(name, namespace)
+        
+        # Resolve selecting pods
+        pods_list = []
+        if obj.spec.selector:
+            selector_str = ",".join(f"{k}={v}" for k, v in obj.spec.selector.items())
+            pods = await v1.list_namespaced_pod(namespace, label_selector=selector_str)
+            pods_list = [
+                {
+                    "name": p.metadata.name,
+                    "namespace": p.metadata.namespace,
+                    "status": p.status.phase,
+                    "ip": p.status.pod_ip
+                } for p in pods.items
+            ]
+            
+        return {
+            "metadata": {"name": obj.metadata.name, "namespace": obj.metadata.namespace, "labels": obj.metadata.labels, "creation_timestamp": obj.metadata.creation_timestamp},
+            "spec": {
+                "type": obj.spec.type,
+                "cluster_ip": obj.spec.cluster_ip,
+                "ports": [p.to_dict() for p in obj.spec.ports] if obj.spec.ports else [],
+                "selector": obj.spec.selector
+            },
+            "status": {
+                "load_balancer": obj.status.load_balancer.to_dict() if obj.status.load_balancer else None
+            },
+            "pods": pods_list
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.get("/resources/{context_name}/ingresses/{namespace}/{name}")
+async def get_ingress_details(context_name: str, namespace: str, name: str):
+    try:
+        client = await cluster_manager.get_client(context_name)
+        v1 = CoreV1Api(client)
+        networking_v1 = NetworkingV1Api(client)
+        obj = await networking_v1.read_namespaced_ingress(name, namespace)
+        
+        # Resolve backend services and their selecting pods
+        service_names = set()
+        if obj.spec.rules:
+            for rule in obj.spec.rules:
+                if rule.http and rule.http.paths:
+                    for path in rule.http.paths:
+                        svc = path.backend.service
+                        if svc and svc.name:
+                            service_names.add(svc.name)
+        if obj.spec.default_backend and obj.spec.default_backend.service and obj.spec.default_backend.service.name:
+            service_names.add(obj.spec.default_backend.service.name)
+            
+        pods_dict = {}
+        for svc_name in service_names:
+            try:
+                svc = await v1.read_namespaced_service(svc_name, namespace)
+                if svc.spec.selector:
+                    selector_str = ",".join(f"{k}={v}" for k, v in svc.spec.selector.items())
+                    pods = await v1.list_namespaced_pod(namespace, label_selector=selector_str)
+                    for p in pods.items:
+                        pods_dict[p.metadata.name] = {
+                            "name": p.metadata.name,
+                            "namespace": p.metadata.namespace,
+                            "status": p.status.phase,
+                            "ip": p.status.pod_ip,
+                            "service": svc_name
+                        }
+            except Exception:
+                pass
+                
+        return {
+            "metadata": {"name": obj.metadata.name, "namespace": obj.metadata.namespace, "labels": obj.metadata.labels, "creation_timestamp": obj.metadata.creation_timestamp},
+            "spec": {
+                "rules": [{"host": r.host, "http": {"paths": [{"path": p.path, "path_type": p.path_type, "backend": p.backend.to_dict()} for p in r.http.paths]}} for r in obj.spec.rules] if obj.spec.rules else []
+            },
+            "status": {
+                "load_balancer": obj.status.load_balancer.to_dict() if obj.status.load_balancer else None
+            },
+            "pods": list(pods_dict.values())
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.get("/resources/{context_name}/replicasets/{namespace}/{name}")
+async def get_replicaset_details(context_name: str, namespace: str, name: str):
+    try:
+        client = await cluster_manager.get_client(context_name)
+        apps_v1 = AppsV1Api(client)
+        obj = await apps_v1.read_namespaced_replica_set(name, namespace)
+        return {
+            "metadata": {"name": obj.metadata.name, "namespace": obj.metadata.namespace, "labels": obj.metadata.labels, "creation_timestamp": obj.metadata.creation_timestamp},
+            "spec": {
+                "replicas": obj.spec.replicas,
+                "selector": obj.spec.selector.match_labels if obj.spec.selector else None
+            },
+            "status": {
+                "replicas": obj.status.replicas,
+                "ready_replicas": obj.status.ready_replicas or 0,
+                "fully_labeled_replicas": obj.status.fully_labeled_replicas or 0,
+                "available_replicas": obj.status.available_replicas or 0
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.get("/resources/{context_name}/jobs/{namespace}/{name}")
+async def get_job_details(context_name: str, namespace: str, name: str):
+    try:
+        client = await cluster_manager.get_client(context_name)
+        batch_v1 = BatchV1Api(client)
+        obj = await batch_v1.read_namespaced_job(name, namespace)
+        return {
+            "metadata": {"name": obj.metadata.name, "namespace": obj.metadata.namespace, "labels": obj.metadata.labels, "creation_timestamp": obj.metadata.creation_timestamp},
+            "spec": {
+                "completions": obj.spec.completions,
+                "parallelism": obj.spec.parallelism,
+                "backoff_limit": obj.spec.backoff_limit
+            },
+            "status": {
+                "active": obj.status.active or 0,
+                "succeeded": obj.status.succeeded or 0,
+                "failed": obj.status.failed or 0,
+                "start_time": obj.status.start_time,
+                "completion_time": obj.status.completion_time
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.get("/resources/{context_name}/custom/{group}/{version}/{plural}/{name}")
+async def get_custom_details_cluster(context_name: str, group: str, version: str, plural: str, name: str):
+    try:
+        client = await cluster_manager.get_client(context_name)
+        custom = CustomObjectsApi(client)
+        obj = await custom.get_cluster_custom_object(group, version, plural, name)
+        return {
+            "metadata": {"name": obj['metadata']['name'], "labels": obj['metadata'].get('labels', {}), "creation_timestamp": obj['metadata']['creationTimestamp']},
+            "spec": obj.get('spec', {}),
+            "status": obj.get('status', {})
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.get("/resources/{context_name}/custom/{group}/{version}/{plural}/{namespace}/{name}")
+async def get_custom_details_namespaced(context_name: str, group: str, version: str, plural: str, namespace: str, name: str):
+    try:
+        client = await cluster_manager.get_client(context_name)
+        custom = CustomObjectsApi(client)
+        obj = await custom.get_namespaced_custom_object(group, version, namespace, plural, name)
+        return {
+            "metadata": {"name": obj['metadata']['name'], "namespace": obj['metadata'].get('namespace'), "labels": obj['metadata'].get('labels', {}), "creation_timestamp": obj['metadata']['creationTimestamp']},
+            "spec": obj.get('spec', {}),
+            "status": obj.get('status', {})
+        }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

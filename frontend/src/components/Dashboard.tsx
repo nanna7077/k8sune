@@ -304,6 +304,9 @@ interface ResourceDetail {
     metadata: any;
     status: any;
     spec?: any;
+    counts?: any;
+    usage?: any;
+    pods?: any[];
 }
 
 const NATIVE_OTHERS = [
@@ -488,26 +491,55 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
           else if (type === 'statefulsets') endpoint = `/api/resources/${context}/statefulsets/${ns}/${name}`;
           else if (type === 'daemonsets') endpoint = `/api/resources/${context}/daemonsets/${ns}/${name}`;
           else if (type === 'cronjobs') endpoint = `/api/resources/${context}/cronjobs/${ns}/${name}`;
+          else if (type === 'namespaces') endpoint = `/api/resources/${context}/namespaces/${name}`;
+          else if (type === 'services' || type === 'other_services') endpoint = `/api/resources/${context}/services/${ns}/${name}`;
+          else if (type === 'ingresses' || type === 'other_ingresses') endpoint = `/api/resources/${context}/ingresses/${ns}/${name}`;
+          else if (type === 'replicasets' || type === 'other_replicasets') endpoint = `/api/resources/${context}/replicasets/${ns}/${name}`;
+          else if (type === 'jobs' || type === 'other_jobs') endpoint = `/api/resources/${context}/jobs/${ns}/${name}`;
+          else if (type.startsWith('custom_')) {
+              const plural = type.replace('custom_', '');
+              const crd = crds.find(c => c.plural === plural);
+              if (crd) {
+                  const itemNamespace = selectedResource.namespace;
+                  if (itemNamespace && itemNamespace !== 'Cluster') {
+                      endpoint = `/api/resources/${context}/custom/${crd.group}/${crd.version}/${crd.plural}/${itemNamespace}/${name}`;
+                  } else {
+                      endpoint = `/api/resources/${context}/custom/${crd.group}/${crd.version}/${crd.plural}/${name}`;
+                  }
+              }
+          }
           
           if (endpoint) {
-              const data = await apiFetch<ResourceDetail>(endpoint);
-              setResourceDetail(data);
+              try {
+                  const data = await apiFetch<ResourceDetail>(endpoint);
+                  setResourceDetail(data);
 
-              if ((type === 'deployments' || type === 'statefulsets' || type === 'daemonsets') && data.spec?.selector) {
-                  const selector = Object.entries(data.spec.selector).map(([k, v]) => `${k}=${v}`).join(',');
-                  const podsData = await apiFetch<{ items: ResourceItem[] }>(`/api/resources/${context}/pods/selector/${ns}?label_selector=${encodeURIComponent(selector)}`);
-                  setDetailPods(podsData.items);
+                  if ((type === 'deployments' || type === 'statefulsets' || type === 'daemonsets') && data.spec?.selector) {
+                      const selector = Object.entries(data.spec.selector).map(([k, v]) => `${k}=${v}`).join(',');
+                      const podsData = await apiFetch<{ items: ResourceItem[] }>(`/api/resources/${context}/pods/selector/${ns}?label_selector=${encodeURIComponent(selector)}`);
+                      setDetailPods(podsData.items);
+                  }
+              } catch (err) {
+                  console.error("Failed to load core resource details", err);
               }
           }
 
           if (type === 'nodes') {
-              const podsData = await apiFetch<{ items: ResourceItem[] }>(`/api/resources/${context}/pods/node/${name}`);
-              setDetailPods(podsData.items);
+              try {
+                  const podsData = await apiFetch<{ items: ResourceItem[] }>(`/api/resources/${context}/pods/node/${name}`);
+                  setDetailPods(podsData.items);
+              } catch (err) {
+                  console.error("Failed to load node pods", err);
+              }
           }
 
-          const eventsData = await apiFetch<{ items: any[] }>(`/api/resources/${context}/events/${ns}/${name}`);
-          setDetailEvents(eventsData.items);
-
+          try {
+              const eventsData = await apiFetch<{ items: any[] }>(`/api/resources/${context}/events/${ns}/${name}`);
+              setDetailEvents(eventsData.items || []);
+          } catch (err) {
+              console.error("Failed to load resource events", err);
+              setDetailEvents([]);
+          }
       } catch (e) {
           console.error(e);
       } finally {
@@ -1413,6 +1445,201 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                                                 <div key={c.type} style={{ display: 'contents' }}>
                                                     <span>{c.type}</span>
                                                     <Badge color={c.status === 'True' ? 'success' : 'important'}>{c.status}</Badge>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </Card>
+                                )}
+
+                                {selectedResource.type === 'namespaces' && resourceDetail.status && (
+                                    <>
+                                    <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)' }}>
+                                        <CardHeader header={<Subtitle2>Status</Subtitle2>} />
+                                        <div className={styles.kvTable} style={{ padding: '1rem' }}>
+                                            <span>Phase</span> 
+                                            <Badge color={resourceDetail.status.phase === 'Active' ? 'success' : 'important'}>
+                                                {resourceDetail.status.phase}
+                                            </Badge>
+                                        </div>
+                                    </Card>
+
+                                    <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)' }}>
+                                        <CardHeader header={<Subtitle2>Resource Counts</Subtitle2>} />
+                                        <div className={styles.kvTable} style={{ padding: '1rem' }}>
+                                            <span>Deployments</span> <span>{resourceDetail.counts?.deployments ?? 0}</span>
+                                            <span>StatefulSets</span> <span>{resourceDetail.counts?.statefulsets ?? 0}</span>
+                                            <span>DaemonSets</span> <span>{resourceDetail.counts?.daemonsets ?? 0}</span>
+                                            <span>CronJobs</span> <span>{resourceDetail.counts?.cronjobs ?? 0}</span>
+                                            <span>Jobs</span> <span>{resourceDetail.counts?.jobs ?? 0}</span>
+                                            <span>Pods</span> <span>{resourceDetail.counts?.pods ?? 0}</span>
+                                            <span>Services</span> <span>{resourceDetail.counts?.services ?? 0}</span>
+                                            <span>Ingresses</span> <span>{resourceDetail.counts?.ingresses ?? 0}</span>
+                                            <span>ConfigMaps</span> <span>{resourceDetail.counts?.configmaps ?? 0}</span>
+                                            <span>Secrets</span> <span>{resourceDetail.counts?.secrets ?? 0}</span>
+                                            <span>PVCs</span> <span>{resourceDetail.counts?.pvcs ?? 0}</span>
+                                        </div>
+                                    </Card>
+
+                                    <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)' }}>
+                                        <CardHeader header={<Subtitle2>Resource Usage (Requests)</Subtitle2>} />
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1rem' }}>
+                                            <div>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px', fontSize: '0.8rem' }}>
+                                                    <span>CPU Requests (Namespace / Cluster Allocatable)</span>
+                                                    <span>
+                                                        {resourceDetail.usage?.cpu ? (
+                                                            `${(resourceDetail.usage.cpu.reserved / 1000).toFixed(1)} / ${(resourceDetail.usage.cpu.cluster_allocatable / 1000).toFixed(1)} Cores`
+                                                        ) : '---'}
+                                                    </span>
+                                                </div>
+                                                {resourceDetail.usage?.cpu && (
+                                                    <ProgressBar 
+                                                        value={resourceDetail.usage.cpu.reserved} 
+                                                        max={resourceDetail.usage.cpu.cluster_allocatable || 1} 
+                                                        color={resourceDetail.usage.cpu.reserved / resourceDetail.usage.cpu.cluster_allocatable > 0.8 ? 'error' : 'brand'}
+                                                    />
+                                                )}
+                                            </div>
+                                            <div>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px', fontSize: '0.8rem' }}>
+                                                    <span>Memory Requests (Namespace / Cluster Allocatable)</span>
+                                                    <span>
+                                                        {resourceDetail.usage?.memory ? (
+                                                            `${(resourceDetail.usage.memory.reserved / (1024**3)).toFixed(1)} / ${(resourceDetail.usage.memory.cluster_allocatable / (1024**3)).toFixed(1)} GiB`
+                                                        ) : '---'}
+                                                    </span>
+                                                </div>
+                                                {resourceDetail.usage?.memory && (
+                                                    <ProgressBar 
+                                                        value={resourceDetail.usage.memory.reserved} 
+                                                        max={resourceDetail.usage.memory.cluster_allocatable || 1} 
+                                                        color={resourceDetail.usage.memory.reserved / resourceDetail.usage.memory.cluster_allocatable > 0.8 ? 'error' : 'brand'}
+                                                    />
+                                                )}
+                                            </div>
+                                        </div>
+                                    </Card>
+                                    </>
+                                )}
+
+                                {(selectedResource.type === 'services' || selectedResource.type === 'other_services') && resourceDetail.spec && (
+                                    <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)' }}>
+                                        <CardHeader header={<Subtitle2>Service Details</Subtitle2>} />
+                                        <div className={styles.kvTable} style={{ padding: '1rem' }}>
+                                            <span>Type</span> <span>{resourceDetail.spec.type}</span>
+                                            <span>Cluster IP</span> <code>{resourceDetail.spec.cluster_ip}</code>
+                                            <span>Ports</span> 
+                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                                                {resourceDetail.spec.ports?.map((p: any, idx: number) => (
+                                                    <Badge key={idx} appearance="outline">{p.port}:{p.targetPort || p.target_port}/{p.protocol}</Badge>
+                                                ))}
+                                            </div>
+                                            {resourceDetail.spec.selector && (
+                                                <>
+                                                <span>Selector</span>
+                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                                                    {Object.entries(resourceDetail.spec.selector).map(([k, v]) => (
+                                                        <Badge key={k} appearance="tint">{k}={v as string}</Badge>
+                                                    ))}
+                                                </div>
+                                                </>
+                                            )}
+                                        </div>
+                                    </Card>
+                                )}
+
+                                {(selectedResource.type === 'ingresses' || selectedResource.type === 'other_ingresses') && resourceDetail.spec && (
+                                    <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)' }}>
+                                        <CardHeader header={<Subtitle2>Ingress Rules</Subtitle2>} />
+                                        <div style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                            {resourceDetail.spec.rules?.map((rule: any, idx: number) => (
+                                                <div key={idx} style={{ borderBottom: '1px solid var(--colorNeutralStroke2)', paddingBottom: '8px' }}>
+                                                    <div style={{ fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Host: {rule.host || '*'}</div>
+                                                    <div className={styles.kvTable}>
+                                                        {rule.http?.paths?.map((path: any, pIdx: number) => (
+                                                            <div key={pIdx} style={{ display: 'contents' }}>
+                                                                <span>Path (<code>{path.path || '/'}</code>)</span>
+                                                                <span>
+                                                                    Service: <code>{path.backend?.service?.name || path.backend?.serviceName}</code> 
+                                                                    (Port: {path.backend?.service?.port?.number || path.backend?.servicePort})
+                                                                </span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </Card>
+                                )}
+
+                                {(selectedResource.type === 'services' || selectedResource.type === 'other_services' || selectedResource.type === 'ingresses' || selectedResource.type === 'other_ingresses') && (
+                                     <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)', marginTop: '0.5rem' }}>
+                                        <CardHeader header={<Subtitle2>Selected Pods</Subtitle2>} />
+                                        <div style={{ padding: '1rem' }}>
+                                            {resourceDetail.pods && resourceDetail.pods.length > 0 ? (
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                                    {resourceDetail.pods.map((p: any) => (
+                                                        <div key={p.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--colorNeutralStroke3)', paddingBottom: '4px' }}>
+                                                            <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                                                <span 
+                                                                    className={styles.clickableName} 
+                                                                    onClick={() => setSelectedResource({ type: 'pods', name: p.name, namespace: p.namespace || selectedResource.namespace })}
+                                                                >
+                                                                    {p.name}
+                                                                </span>
+                                                                {p.service && <span style={{ fontSize: '0.75rem', opacity: 0.6 }}>via Service: {p.service}</span>}
+                                                            </div>
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                                {p.ip && <code style={{ fontSize: '0.75rem' }}>{p.ip}</code>}
+                                                                <Badge color={p.status === 'Running' ? 'success' : 'warning'}>{p.status}</Badge>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            ) : (
+                                                <div style={{ opacity: 0.5, fontSize: '0.85rem' }}>No pods currently selected.</div>
+                                            )}
+                                        </div>
+                                     </Card>
+                                )}
+
+                                {(selectedResource.type === 'replicasets' || selectedResource.type === 'other_replicasets') && resourceDetail.status && (
+                                    <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)' }}>
+                                        <CardHeader header={<Subtitle2>ReplicaSet Status</Subtitle2>} />
+                                        <div className={styles.kvTable} style={{ padding: '1rem' }}>
+                                            <span>Desired Replicas</span> <span>{resourceDetail.spec?.replicas}</span>
+                                            <span>Current Replicas</span> <span>{resourceDetail.status.replicas}</span>
+                                            <span>Ready Replicas</span> <Badge color={resourceDetail.status.ready_replicas === resourceDetail.spec?.replicas ? 'success' : 'warning'}>{resourceDetail.status.ready_replicas}</Badge>
+                                            <span>Available Replicas</span> <span>{resourceDetail.status.available_replicas}</span>
+                                        </div>
+                                    </Card>
+                                )}
+
+                                {(selectedResource.type === 'jobs' || selectedResource.type === 'other_jobs') && resourceDetail.status && (
+                                    <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)' }}>
+                                        <CardHeader header={<Subtitle2>Job Status</Subtitle2>} />
+                                        <div className={styles.kvTable} style={{ padding: '1rem' }}>
+                                            <span>Completions</span> <span>{resourceDetail.spec?.completions}</span>
+                                            <span>Parallelism</span> <span>{resourceDetail.spec?.parallelism}</span>
+                                            <span>Active</span> <span>{resourceDetail.status.active}</span>
+                                            <span>Succeeded</span> <Badge color="success">{resourceDetail.status.succeeded}</Badge>
+                                            <span>Failed</span> <Badge color={resourceDetail.status.failed > 0 ? 'important' : 'subtle'}>{resourceDetail.status.failed}</Badge>
+                                            {resourceDetail.status.start_time && <><span>Started</span> <span>{new Date(resourceDetail.status.start_time).toLocaleString()}</span></>}
+                                            {resourceDetail.status.completion_time && <><span>Completed</span> <span>{new Date(resourceDetail.status.completion_time).toLocaleString()}</span></>}
+                                        </div>
+                                    </Card>
+                                )}
+
+                                {selectedResource.type.startsWith('custom_') && resourceDetail.spec && (
+                                    <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)' }}>
+                                        <CardHeader header={<Subtitle2>Spec Summary</Subtitle2>} />
+                                        <div className={styles.kvTable} style={{ padding: '1rem' }}>
+                                            {Object.entries(resourceDetail.spec).map(([k, v]) => (
+                                                <div key={k} style={{ display: 'contents' }}>
+                                                    <span>{k}</span>
+                                                    <span style={{ wordBreak: 'break-all', fontSize: '0.85rem' }}>
+                                                        {typeof v === 'object' ? JSON.stringify(v) : String(v)}
+                                                    </span>
                                                 </div>
                                             ))}
                                         </div>

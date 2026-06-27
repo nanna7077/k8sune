@@ -89,28 +89,37 @@ export const TitleBar = ({ title = "k8sune" }: { title?: string }) => {
     }
   };
 
-  const handleDrag = () => {
-    try {
-      getCurrentWindow().startDragging();
-    } catch (e) {
-      console.error(e);
+  const handleMouseDown = async (e: React.MouseEvent) => {
+    if (e.buttons === 1) {
+      if (e.detail === 2) {
+        try {
+          await getCurrentWindow().toggleMaximize();
+        } catch (err) {
+          console.error("Maximize failed", err);
+        }
+      } else {
+        try {
+          await getCurrentWindow().startDragging();
+        } catch (err) {
+          console.error("Drag failed", err);
+        }
+      }
     }
   };
 
   return (
     <div 
       className={styles.titlebar}
-      onDoubleClick={handleMaximize}
+      onMouseDown={handleMouseDown}
     >
-      <div 
-        className={styles.dragRegion}
-        onMouseDown={(e) => {
-          if (e.buttons === 1) handleDrag();
-        }}
-      >
+      <div className={styles.dragRegion}>
         <span className={styles.title} style={{ pointerEvents: 'none' }}>{title}</span>
       </div>
-      <div className={styles.controls} onDoubleClick={(e) => e.stopPropagation()}>
+      <div 
+        className={styles.controls} 
+        onMouseDown={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
+      >
         <div className={styles.controlButton} onClick={handleMinimize}>
           <Subtract20Regular />
         </div>
