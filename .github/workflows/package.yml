@@ -60,12 +60,6 @@ jobs:
             patchelf \
             zsync
 
-      - name: Install Tauri CLI (if not already installed)
-        run: |
-          if ! command -v tauri >/dev/null 2>&1; then
-            cargo install tauri-cli --locked
-          fi
-
       - name: Build Tauri application
         run: |
           if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
