@@ -89,7 +89,7 @@ jobs:
         run: |
           mkdir -p artifacts
           if [ -d "src-tauri/target/release/bundle" ]; then
-            find src-tauri/target/release/bundle -maxdepth 1 -not -name bundle -exec cp -r {} artifacts/ \;
+            find src-tauri/target/release/bundle -type f \( -name "*.deb" -o -name "*.rpm" -o -name "*.AppImage" \) -exec cp {} artifacts/ \;
           fi
           if [ -d "src-tauri/target/universal-apple-darwin/release/bundle/dmg" ]; then
             find src-tauri/target/universal-apple-darwin/release/bundle/dmg -name "*.dmg" -exec cp {} artifacts/ \;
@@ -129,18 +129,30 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event.inputs.tag_name != '' || startsWith(github.ref, 'refs/tags/') || github.event.release.tag_name != null
     steps:
-      - name: Checkout Homebrew tap repository
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ secrets.HOMEBREW_TAP_REPO }}
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          path: tap
+      - name: Checkout/Initialize Homebrew tap repository
+        env:
+          TAP_REPO: ${{ secrets.HOMEBREW_TAP_REPO }}
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" tap || {
+            echo "Clone failed. Initializing manually..."
+            mkdir -p tap
+            cd tap
+            git init
+            git remote add origin "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git"
+            cd ..
+          }
+          cd tap
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git checkout -b main || git checkout main || true
 
       - name: Generate/Update Homebrew formula
         env:
           REPO: ${{ github.repository }}
           VERSION: ${{ github.event.inputs.tag_name || github.event.release.tag_name || github.ref_name }}
         run: |
+          mkdir -p tap/Formula
           FORMULA_PATH="tap/Formula/k8sune.rb"
           cat > "$FORMULA_PATH" <<EOF2
           class K8sune < Formula
@@ -159,13 +171,8 @@ jobs:
       - name: Commit and push formula
         run: |
           cd tap
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
           git add Formula/k8sune.rb
-          git commit -m "Release ${{ github.event.inputs.tag_name || github.event.release.tag_name || github.ref_name }}"
-          git push origin HEAD
-        env:
-          GIT_AUTHOR_NAME: github-actions
-          GIT_AUTHOR_EMAIL: github-actions@github.com
+          git commit -m "Release ${{ github.event.inputs.tag_name || github.event.release.tag_name || github.ref_name }}" || echo "No changes to commit"
+          git push origin main
 
 
