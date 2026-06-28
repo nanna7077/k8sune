@@ -71,7 +71,7 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN: 1
 
       - name: Sign and notarize DMG
-        if: matrix.os == 'macos-latest'
+        if: matrix.os == 'macos-latest' && secrets.APPLE_CERTIFICATE != ''
         run: |
           DMG=$(find src-tauri/target/universal-apple-darwin/release/bundle/dmg -name "*.dmg")
           codesign --sign "$APPLE_CERTIFICATE" --deep --force "$DMG"
