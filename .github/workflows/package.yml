@@ -47,19 +47,30 @@ jobs:
             cargo install tauri-cli --locked
           fi
 
-      - name: Build Tauri application (universal)
-        run: npm run tauri build -- --target universal-apple-darwin
+      - name: Build Tauri application
+        run: |
+          if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+            npm run tauri build -- --target universal-apple-darwin
+          else
+            npm run tauri build
+          fi
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
 
       - name: Sign and notarize DMG
+        if: matrix.os == 'macos-latest'
         run: |
           DMG=$(find src-tauri/target/universal-apple-darwin/release/bundle/dmg -name "*.dmg")
           codesign --sign "$APPLE_CERTIFICATE" --deep --force "$DMG"
           # Notarize (requires Apple notary credentials)
           xcrun altool --notarize-app -f "$DMG" --primary-bundle-id "com.nanna7077.k8sune" -u "$APPLE_NOTARY_USER" -p "$APPLE_NOTARY_PASSWORD"
         env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          APPLE_NOTARY_USER: ${{ secrets.APPLE_NOTARY_USER }}
+          APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
+
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
           APPLE_NOTARY_USER: ${{ secrets.APPLE_NOTARY_USER }}
