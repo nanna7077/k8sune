@@ -94,10 +94,13 @@ jobs:
           if [ -d "src-tauri/target/universal-apple-darwin/release/bundle/dmg" ]; then
             find src-tauri/target/universal-apple-darwin/release/bundle/dmg -name "*.dmg" -exec cp {} artifacts/ \;
           fi
-          if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
-            VERSION="${{ github.event.inputs.tag_name || github.event.release.tag_name || github.ref_name }}"
-            tar -czf "artifacts/k8sune-${VERSION}.tar.gz" -C src-tauri/target/release k8sune
-            sha256sum "artifacts/k8sune-${VERSION}.tar.gz" | awk '{print $1}' > "artifacts/k8sune-${VERSION}.tar.gz.sha256"
+          VERSION="${{ github.event.inputs.tag_name || github.event.release.tag_name || github.ref_name }}"
+          if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+            tar -czf "artifacts/k8sune-macos-${VERSION}.tar.gz" -C src-tauri/target/universal-apple-darwin/release k8sune
+            shasum -a 256 "artifacts/k8sune-macos-${VERSION}.tar.gz" | awk '{print $1}' > "artifacts/k8sune-macos-${VERSION}.tar.gz.sha256"
+          else
+            tar -czf "artifacts/k8sune-linux-${VERSION}.tar.gz" -C src-tauri/target/release k8sune
+            shasum -a 256 "artifacts/k8sune-linux-${VERSION}.tar.gz" | awk '{print $1}' > "artifacts/k8sune-linux-${VERSION}.tar.gz.sha256"
           fi
 
       - name: Upload artifacts for workflow run
