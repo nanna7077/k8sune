@@ -104,13 +104,21 @@ jobs:
             fi
           fi
           VERSION="${{ github.event.inputs.tag_name || github.event.release.tag_name || github.ref_name }}"
+          
+          # Prepare a temporary distribution directory containing both the binary and the backend resources
+          mkdir -p dist-temp/backend
+          cp -r backend/api backend/cluster backend/models backend/utils backend/libs backend/main.py dist-temp/backend/
+          
           if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
-            tar -czf "artifacts/k8sune-macos-${VERSION}.tar.gz" -C src-tauri/target/universal-apple-darwin/release k8sune
+            cp src-tauri/target/universal-apple-darwin/release/k8sune dist-temp/
+            tar -czf "artifacts/k8sune-macos-${VERSION}.tar.gz" -C dist-temp k8sune backend
             shasum -a 256 "artifacts/k8sune-macos-${VERSION}.tar.gz" | awk '{print $1}' > "artifacts/k8sune-macos-${VERSION}.tar.gz.sha256"
           else
-            tar -czf "artifacts/k8sune-linux-${VERSION}.tar.gz" -C src-tauri/target/release k8sune
+            cp src-tauri/target/release/k8sune dist-temp/
+            tar -czf "artifacts/k8sune-linux-${VERSION}.tar.gz" -C dist-temp k8sune backend
             shasum -a 256 "artifacts/k8sune-linux-${VERSION}.tar.gz" | awk '{print $1}' > "artifacts/k8sune-linux-${VERSION}.tar.gz.sha256"
           fi
+          rm -rf dist-temp
 
       - name: Upload artifacts for workflow run
         uses: actions/upload-artifact@v4
@@ -199,6 +207,7 @@ jobs:
 
             def install
               bin.install "k8sune"
+              bin.install "backend"
             end
           end
           EOF2

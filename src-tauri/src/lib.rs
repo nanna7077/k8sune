@@ -55,9 +55,17 @@ pub fn run() {
         );
       }
 
-      let backend_dir = app.path()
-          .resolve("backend", tauri::path::BaseDirectory::Resource)
-          .unwrap_or_default();
+      let current_exe = std::env::current_exe().unwrap_or_default();
+      let exe_dir = current_exe.parent().unwrap_or(&current_exe);
+      let backend_next_to_exe = exe_dir.join("backend");
+
+      let backend_dir = if backend_next_to_exe.exists() {
+          backend_next_to_exe
+      } else {
+          app.path()
+              .resolve("backend", tauri::path::BaseDirectory::Resource)
+              .unwrap_or_default()
+      };
       let project_root = backend_dir.parent().unwrap_or(&backend_dir).to_path_buf();
 
       tauri::async_runtime::spawn(async move {
