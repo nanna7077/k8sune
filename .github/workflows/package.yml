@@ -134,6 +134,11 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event.inputs.tag_name != '' || startsWith(github.ref, 'refs/tags/') || github.event.release.tag_name != null
     steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: download-artifacts
+
       - name: Checkout/Initialize Homebrew tap repository
         env:
           TAP_REPO: ${{ secrets.HOMEBREW_TAP_REPO }}
@@ -159,13 +164,25 @@ jobs:
         run: |
           mkdir -p tap/Formula
           FORMULA_PATH="tap/Formula/k8sune.rb"
+          MAC_SHA=$(cat download-artifacts/tauri-build-artifacts-macos-latest/k8sune-macos-${VERSION}.tar.gz.sha256 | tr -d '\r\n[:space:]')
+          LINUX_SHA=$(cat download-artifacts/tauri-build-artifacts-ubuntu-latest/k8sune-linux-${VERSION}.tar.gz.sha256 | tr -d '\r\n[:space:]')
+          
           cat > "$FORMULA_PATH" <<EOF2
           class K8sune < Formula
-            desc "K8sune description"
+            desc "Modern and integrated desktop controller for Kubernetes"
             homepage "https://github.com/${REPO}"
-            url "https://github.com/${REPO}/releases/download/${VERSION}/k8sune-${VERSION}.tar.gz"
-            sha256 "$(curl -L https://github.com/${REPO}/releases/download/${VERSION}/k8sune-${VERSION}.tar.gz.sha256)"
+            version "${VERSION}"
             license "MPL-2.0"
+
+            on_macos do
+              url "https://github.com/${REPO}/releases/download/${VERSION}/k8sune-macos-${VERSION}.tar.gz"
+              sha256 "${MAC_SHA}"
+            end
+
+            on_linux do
+              url "https://github.com/${REPO}/releases/download/${VERSION}/k8sune-linux-${VERSION}.tar.gz"
+              sha256 "${LINUX_SHA}"
+            end
 
             def install
               bin.install "k8sune"
@@ -177,7 +194,7 @@ jobs:
         run: |
           cd tap
           git add Formula/k8sune.rb
-          git commit -m "Release ${{ github.event.inputs.tag_name || github.event.release.tag_name || github.ref_name }}" || echo "No changes to commit"
+          git commit -m "Release ${VERSION}" || echo "No changes to commit"
           git push origin main
 
 
