@@ -55,12 +55,20 @@ pub fn run() {
         );
       }
 
+      let backend_dir = app.path()
+          .resolve("backend", tauri::path::BaseDirectory::Resource)
+          .unwrap_or_default();
+      let project_root = backend_dir.parent().unwrap_or(&backend_dir).to_path_buf();
+
       tauri::async_runtime::spawn(async move {
-          let current_dir = std::env::current_dir().unwrap_or_default();
-          let project_root = current_dir.parent().unwrap_or(&current_dir);
+          let python_in_venv = backend_dir.join("venv/bin/python");
+          let python_path = if python_in_venv.exists() {
+              python_in_venv
+          } else {
+              std::path::PathBuf::from("python3")
+          };
           
-          let python_path = project_root.join("backend/venv/bin/python");
-          let main_path = project_root.join("backend/main.py");
+          let main_path = backend_dir.join("main.py");
           let pythonpath = project_root;
 
           let mut cmd = Command::new(python_path);

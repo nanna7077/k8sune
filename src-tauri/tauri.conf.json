@@ -34,6 +34,14 @@
       "icons/k8sune-icon.png",
       "icons/k8sune-icon.ico",
       "icons/k8sune-icon.icns"
+    ],
+    "resources": [
+      "../backend/api/**/*",
+      "../backend/cluster/**/*",
+      "../backend/models/**/*",
+      "../backend/utils/**/*",
+      "../backend/libs/**/*",
+      "../backend/main.py"
     ]
   }
 }

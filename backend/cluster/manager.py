@@ -33,10 +33,32 @@ class ClusterManager:
         self.cluster_settings[context][key] = value
         self._save_settings()
 
+    def _resolve_kubeconfig_path(self):
+        # 1. KUBECONFIG env var
+        kubeconfig_env = os.environ.get('KUBECONFIG')
+        if kubeconfig_env:
+            for p in kubeconfig_env.split(os.path.pathsep):
+                if os.path.exists(p):
+                    return p
+        
+        # 2. Check standard locations
+        paths = [
+            os.path.expanduser('~/.kube/config'),
+            os.path.expanduser('~/.kube/kubeconfig.yaml')
+        ]
+        for p in paths:
+            if os.path.exists(p):
+                return p
+        return None
+
     async def load_kubeconfig(self):
         try:
+            config_file = self._resolve_kubeconfig_path()
             # Load all contexts (synchronous function in kubernetes_asyncio.config)
-            contexts, active_context = config.list_kube_config_contexts()
+            if config_file:
+                contexts, active_context = config.list_kube_config_contexts(config_file=config_file)
+            else:
+                contexts, active_context = config.list_kube_config_contexts()
             self.contexts = contexts
             self.active_context_name = active_context.get('name') if active_context else None
             return True
@@ -62,7 +84,11 @@ class ClusterManager:
             # just re-load it.
             
             # For now, let's load it globally but we might need to be more surgical later
-            await config.load_kube_config(context=target_context)
+            config_file = self._resolve_kubeconfig_path()
+            if config_file:
+                await config.load_kube_config(config_file=config_file, context=target_context)
+            else:
+                await config.load_kube_config(context=target_context)
             client = ApiClient()
             self._clients[target_context] = client
             return client
@@ -83,7 +109,7 @@ class ClusterManager:
             import yaml
             new_config = yaml.safe_load(yaml_content)
             
-            config_path = os.path.expanduser('~/.kube/config')
+            config_path = self._resolve_kubeconfig_path() or os.path.expanduser('~/.kube/config')
             os.makedirs(os.path.dirname(config_path), exist_ok=True)
             
             if os.path.exists(config_path):
