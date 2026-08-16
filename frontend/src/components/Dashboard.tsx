@@ -80,8 +80,8 @@ import { YamlEditor } from './YamlEditor';
 import { ShellTerminal } from './ShellTerminal';
 import { useFeedbackDialog } from './FeedbackDialog';
 import { EventTimeline } from './EventTimeline';
-import { open } from '@tauri-apps/plugin-dialog';
-import { readTextFile } from '@tauri-apps/plugin-fs';
+import { open, save } from '@tauri-apps/plugin-dialog';
+import { readTextFile, readFile, writeTextFile, writeFile } from '@tauri-apps/plugin-fs';
 
 const useStyles = makeStyles({
   container: {
@@ -110,6 +110,8 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     height: 'calc(100vh - 32px)',
+    minHeight: 0,
+    minWidth: 0,
     overflow: 'hidden'
   },
   main: {
@@ -117,6 +119,8 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     overflow: 'hidden',
+    minHeight: 0,
+    minWidth: 0,
     backgroundColor: 'transparent',
   },
   drawer: {
@@ -166,6 +170,8 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: '1.25rem',
     backgroundColor: 'transparent',
+    minHeight: 0,
+    minWidth: 0,
   },
   tableCard: {
     backgroundColor: 'rgba(20, 22, 30, 0.72)',
@@ -264,6 +270,13 @@ const useStyles = makeStyles({
     '&:hover': {
       textDecorationLine: 'underline'
     }
+  },
+  truncatedName: {
+    display: 'block',
+    maxWidth: '100%',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
   },
   detailView: {
     display: 'flex',
@@ -474,6 +487,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
   const [createMemoryLimit, setCreateMemoryLimit] = useState('');
   const [applyNamespace, setApplyNamespace] = useState('');
   const [isApplyingYaml, setIsApplyingYaml] = useState(false);
+  const [formEditTarget, setFormEditTarget] = useState<{ type: string; namespace: string; name: string } | null>(null);
   const [drawerHeight, setDrawerHeight] = useState(400);
   const isResizing = useRef(false);
   
@@ -489,6 +503,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
   const [networkData, setNetworkData] = useState<any>(null);
   const [storageData, setStorageData] = useState<any>(null);
   const [helmData, setHelmData] = useState<any>(null);
+  const [helmError, setHelmError] = useState<string | null>(null);
   const [helmRelease, setHelmRelease] = useState<any>(null);
   const [helmHistory, setHelmHistory] = useState<any[]>([]);
   const [helmValuesDiff, setHelmValuesDiff] = useState('');
@@ -518,6 +533,10 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
   const [activePortForwards, setActivePortForwards] = useState<any[]>([]);
   const [resourceContextMenu, setResourceContextMenu] = useState<{ resource: ResourceItem; x: number; y: number } | null>(null);
   const [sidebarContextMenu, setSidebarContextMenu] = useState<{ x: number; y: number; view?: string; contextMenu?: boolean } | null>(null);
+  const [backupNamespace, setBackupNamespace] = useState<string | null>(null);
+  const [backupKinds, setBackupKinds] = useState<{ kind: string; resources: string[] }[]>([]);
+  const [backupSelection, setBackupSelection] = useState<Record<string, string[]>>({});
+  const [backupBusy, setBackupBusy] = useState(false);
   
   const eventSourceRef = useRef<EventSource | null>(null);
   const [isReachable, setIsReachable] = useState<boolean>(true);
@@ -847,6 +866,11 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
     }
   };
 
+  const handleOpenPortForwardUrl = (session: any) => {
+    const url = `http://127.0.0.1:${session.local_port}`;
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
   const loadData = async () => {
     if (!context) return;
     setLoading(true);
@@ -863,7 +887,14 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
       } else if (activeView === 'persistentvolumes') {
         setStorageData(await apiFetch<any>(`/api/storage/${context}`));
       } else if (activeView === 'helm') {
-        setHelmData(await apiFetch<any>(`/api/helm/${context}/releases`));
+        try {
+          setHelmData(await apiFetch<any>(`/api/helm/${context}/releases`));
+          setHelmError(null);
+        } catch (error: any) {
+          // Helm can be absent or return a CLI error while the Kubernetes API is healthy.
+          setHelmData({ releases: [] });
+          setHelmError(error?.message || String(error));
+        }
       } else if (activeView === 'crds_list') {
          const data = await apiFetch<{ items: CRD[] }>(`/api/crds/${context}`);
          setCrds(data.items);
@@ -1015,16 +1046,15 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
       if (!context || !yamlToApply.trim()) return;
       setIsApplyingYaml(true);
       try {
-          const result = await apiFetch<{ created: number }>(`/api/yaml/${context}/apply`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ yaml_content: yamlToApply, namespace: applyNamespace }),
-          });
+          const result = formEditTarget
+            ? await apiFetch<{ status: string }>(`/api/yaml/${context}/${resourceTypeForAction(formEditTarget.type)}/${formEditTarget.namespace}/${formEditTarget.name}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ yaml_content: yamlToApply }) })
+            : await apiFetch<{ created: number }>(`/api/yaml/${context}/apply`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ yaml_content: yamlToApply, namespace: applyNamespace }) });
           setIsApplyYamlOpen(false);
           setYamlToApply('');
           setApplyNamespace('');
+          setFormEditTarget(null);
           await loadData();
-          feedback.notice('Resources created', `Created ${result.created} resource${result.created === 1 ? '' : 's'}.`, 'success');
+          feedback.notice(formEditTarget ? 'Resource updated' : 'Resources created', formEditTarget ? `${formEditTarget.name} was updated.` : `Created ${(result as { created: number }).created} resource${(result as { created: number }).created === 1 ? '' : 's'}.`, 'success');
       } catch (error) {
           feedback.notice('Could not create resources', String(error), 'error');
       } finally {
@@ -1174,6 +1204,25 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
     setActivePanelId(id);
   };
 
+  const resourceTypeForAction = (type: string) => {
+    if (type.startsWith('custom_')) return type;
+    return ({ other_services: 'services', other_ingresses: 'ingresses', other_replicasets: 'replicasets', other_jobs: 'jobs', pvcs: 'persistentvolumeclaims' } as Record<string, string>)[type] || type;
+  };
+
+  const handleSaveResourceYaml = async (resource: ResourceItem) => {
+    if (!context) return;
+    const resourceType = resourceTypeForAction(activeView);
+    try {
+      const result = await apiFetch<{ yaml: string }>(`/api/yaml/${encodeURIComponent(context)}/${encodeURIComponent(resourceType)}/${encodeURIComponent(resource.namespace || 'none')}/${encodeURIComponent(resource.name)}`);
+      const path = await save({ defaultPath: `${resource.name}.yaml`, filters: [{ name: 'YAML', extensions: ['yaml', 'yml'] }] });
+      if (!path) return;
+      await writeTextFile(path, result.yaml);
+      feedback.notice('YAML saved', `Saved ${resource.name}.yaml.`, 'success');
+    } catch (error: any) {
+      feedback.notice('Could not save YAML', error?.message || String(error), 'error');
+    }
+  };
+
   const handleOpenResourceWindow = (resource: ResourceItem) => {
     if (!context) return;
     openSectionWindow('resource', {
@@ -1182,6 +1231,67 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
       namespace: resource.namespace || '',
       resourceType: activeView,
     });
+  };
+
+  const openResourceFormEditor = () => {
+    if (!selectedResource || !resourceDetail || !CREATE_KIND_BY_VIEW[selectedResource.type]) return;
+    const spec = resourceDetail.spec || {};
+    const container = spec.containers?.[0] || {};
+    setCreateKind(CREATE_KIND_BY_VIEW[selectedResource.type]);
+    setCreateName(selectedResource.name);
+    setApplyNamespace(selectedResource.namespace || '');
+    setCreateDescription(resourceDetail.metadata?.annotations?.['k8sune.io/description'] || '');
+    setCreateImage(container.image || createImage);
+    setCreateReplicas(String(spec.replicas ?? 1));
+    setCreateSchedule(spec.schedule || createSchedule);
+    setCreateDataKey(selectedResource.type === 'configmaps' ? Object.keys(spec.data || {})[0] || 'key' : createDataKey);
+    setCreateDataValue(selectedResource.type === 'configmaps' ? Object.values(spec.data || {})[0] as string || '' : createDataValue);
+    setCreateBuilderTab(selectedResource.type === 'configmaps' || selectedResource.type === 'secrets' ? 'Data' : 'General');
+    setYamlToApply('');
+    setFormEditTarget({ type: selectedResource.type, namespace: selectedResource.namespace || 'default', name: selectedResource.name });
+    setIsApplyYamlOpen(true);
+  };
+
+  const openNamespaceBackup = async (namespace: string) => {
+    if (!context) return;
+    setBackupNamespace(namespace); setBackupBusy(true);
+    try {
+      const result = await apiFetch<{ kinds: { kind: string; resources: string[] }[] }>(`/api/backup/${encodeURIComponent(context)}/${encodeURIComponent(namespace)}/inventory`);
+      setBackupKinds(result.kinds.filter(kind => kind.resources.length));
+      setBackupSelection(Object.fromEntries(result.kinds.filter(kind => kind.resources.length).map(kind => [kind.kind, [...kind.resources]])));
+    } catch (error: any) { feedback.notice('Could not inspect namespace', error?.message || String(error), 'error'); setBackupNamespace(null); }
+    finally { setBackupBusy(false); }
+  };
+
+  const downloadNamespaceBackup = async () => {
+    if (!context || !backupNamespace) return;
+    setBackupBusy(true);
+    try {
+      const result = await apiFetch<{ filename: string; archive: string; resources: number }>(`/api/backup/${encodeURIComponent(context)}/${encodeURIComponent(backupNamespace)}/export`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ selected: backupSelection }) });
+      const path = await save({ defaultPath: result.filename, filters: [{ name: 'k8sune namespace backup', extensions: ['zip'] }] });
+      if (path) {
+        const binary = Uint8Array.from(atob(result.archive), char => char.charCodeAt(0));
+        await writeFile(path, binary);
+        feedback.notice('Namespace backup saved', `${result.resources} resource${result.resources === 1 ? '' : 's'} exported.`, 'success');
+      }
+    } catch (error: any) { feedback.notice('Could not export namespace backup', error?.message || String(error), 'error'); }
+    finally { setBackupBusy(false); }
+  };
+
+  const restoreNamespaceBackup = async (namespace: string) => {
+    if (!context) return;
+    const path = await open({ multiple: false, filters: [{ name: 'k8sune namespace backup', extensions: ['zip'] }] });
+    if (!path || Array.isArray(path)) return;
+    setBackupBusy(true);
+    try {
+      const binary = await readFile(path);
+      let raw = ''; binary.forEach(byte => { raw += String.fromCharCode(byte); });
+      const result = await apiFetch<{ restored: number; failures: any[] }>(`/api/backup/${encodeURIComponent(context)}/${encodeURIComponent(namespace)}/restore`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ archive: btoa(raw) }) });
+      if (result.failures?.length) feedback.notice('Namespace restore completed with issues', `${result.restored} restored; ${result.failures.length} could not be applied.`, 'warning');
+      else feedback.notice('Namespace restored', `${result.restored} resource${result.restored === 1 ? '' : 's'} applied.`, 'success');
+      loadResourceDetail();
+    } catch (error: any) { feedback.notice('Could not restore namespace backup', error?.message || String(error), 'error'); }
+    finally { setBackupBusy(false); }
   };
 
   const handleOpenViewWindow = (view: string) => {
@@ -1474,6 +1584,13 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
           <TableHeaderCell key="hosts">Hosts</TableHeaderCell>,
           <TableHeaderCell key="actions" style={{ width: '40px' }}></TableHeaderCell>
         ];
+      case 'secrets':
+        return [
+          ...common,
+          sortableHeader('type', 'Type'),
+          <TableHeaderCell key="summary">TLS summary</TableHeaderCell>,
+          <TableHeaderCell key="actions" style={{ width: '40px' }}></TableHeaderCell>
+        ];
       default:
         return [
           ...common,
@@ -1552,12 +1669,11 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
           ? <MenuItem icon={<Link20Regular />} onClick={() => handleStopPortForward(r.namespace, r.name)}>Stop Port Forward</MenuItem>
           : <MenuItem icon={<Link20Regular />} onClick={() => handleStartPortForward(r.namespace, r.name, r.ports?.[0])}>Start Port Forward</MenuItem>)()
       )}
-      {(['deployments', 'statefulsets', 'daemonsets', 'cronjobs', 'configmaps', 'secrets', 'persistentvolumeclaims'].includes(activeView) || activeView.startsWith('custom_')) && (
-        <MenuItem icon={<Document20Regular />} onClick={() => {
-          const crd = activeView.startsWith('custom_') ? crds.find(item => item.plural === activeView.replace('custom_', '')) : undefined;
-          handleOpenYaml(r.namespace || 'default', r.name, crd ? `custom_${crd.group}_${crd.version}_${crd.plural}` : activeView);
-        }}>Edit Resource</MenuItem>
-      )}
+      <MenuItem icon={<Document20Regular />} onClick={() => {
+        const crd = activeView.startsWith('custom_') ? crds.find(item => item.plural === activeView.replace('custom_', '')) : undefined;
+        handleOpenYaml(r.namespace || 'none', r.name, crd ? `custom_${crd.group}_${crd.version}_${crd.plural}` : resourceTypeForAction(activeView));
+      }}>Edit YAML</MenuItem>
+      <MenuItem icon={<Document20Regular />} onClick={() => handleSaveResourceYaml(r)}>Save YAML…</MenuItem>
       <MenuItem icon={<Delete20Regular />} style={{ color: 'var(--colorPaletteRedForeground1)' }} onClick={() => handleDeleteResource(r.namespace, r.name, activeView)}>Delete</MenuItem>
     </>
   );
@@ -1570,7 +1686,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
 
   const renderResourceRow = (r: ResourceItem) => {
     const commonCells = [
-      <TableCell key="name"><span className={styles.clickableName} onClick={() => setSelectedResource({ type: activeView, name: r.name, namespace: r.namespace })} onContextMenu={event => openResourceContextMenu(event, r)}>{r.name}</span></TableCell>,
+      <TableCell key="name" title={r.name}><span className={`${styles.clickableName} ${styles.truncatedName}`} onClick={() => setSelectedResource({ type: activeView, name: r.name, namespace: r.namespace })} onContextMenu={event => openResourceContextMenu(event, r)}>{r.name}</span></TableCell>,
       <TableCell key="ns"><Badge appearance="tint" color="brand">{r.namespace || 'Cluster'}</Badge></TableCell>
     ];
 
@@ -1608,8 +1724,8 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
     switch (activeView) {
         case 'nodes':
             return (
-                <TableRow key={r.name}>
-                    <TableCell><span className={styles.clickableName} onClick={() => setSelectedResource({ type: 'nodes', name: r.name })} onContextMenu={event => openResourceContextMenu(event, r)}>{r.name}</span></TableCell>
+                <TableRow key={r.name} onContextMenu={event => openResourceContextMenu(event, r)}>
+                    <TableCell title={r.name}><span className={`${styles.clickableName} ${styles.truncatedName}`} onClick={() => setSelectedResource({ type: 'nodes', name: r.name })} onContextMenu={event => openResourceContextMenu(event, r)}>{r.name}</span></TableCell>
                     <TableCell><Badge color={r.status === 'Ready' ? 'success' : 'important'}>{r.status}</Badge></TableCell>
                     <TableCell><code style={{ fontSize: '0.75rem' }}>{r.internal_ip}</code></TableCell>
                     <TableCell><code style={{ fontSize: '0.75rem' }}>{r.external_ip}</code></TableCell>
@@ -1624,7 +1740,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
         case 'pods':
             const { cpu, mem } = getMetricValues(r);
             return (
-                <TableRow key={`${r.namespace}-${r.name}`}>
+                <TableRow key={`${r.namespace}-${r.name}`} onContextMenu={event => openResourceContextMenu(event, r)}>
                     {commonCells}
                     <TableCell>
                         <Badge color={r.status === 'Running' ? 'success' : 'important'} appearance="outline">
@@ -1639,7 +1755,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
             );
         case 'deployments':
             return (
-                <TableRow key={`${r.namespace}-${r.name}`}>
+                <TableRow key={`${r.namespace}-${r.name}`} onContextMenu={event => openResourceContextMenu(event, r)}>
                     {commonCells}
                     <TableCell>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -1655,7 +1771,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
             );
         case 'statefulsets':
             return (
-                <TableRow key={`${r.namespace}-${r.name}`}>
+                <TableRow key={`${r.namespace}-${r.name}`} onContextMenu={event => openResourceContextMenu(event, r)}>
                     {commonCells}
                     <TableCell>{r.replicas ?? 0}</TableCell>
                     <TableCell><Badge color={(r.ready_replicas ?? 0) === (r.replicas ?? 0) ? 'success' : 'warning'}>{r.ready_replicas ?? 0}</Badge></TableCell>
@@ -1666,7 +1782,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
         case 'replicasets':
         case 'other_replicasets':
             return (
-                <TableRow key={`${r.namespace}-${r.name}`}>
+                <TableRow key={`${r.namespace}-${r.name}`} onContextMenu={event => openResourceContextMenu(event, r)}>
                     {commonCells}
                     <TableCell>{r.replicas ?? 0}</TableCell>
                     <TableCell><Badge color={(r.ready_replicas ?? 0) === (r.replicas ?? 0) ? 'success' : 'warning'}>{r.ready_replicas ?? 0}</Badge></TableCell>
@@ -1676,7 +1792,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
         case 'jobs':
         case 'other_jobs':
             return (
-                <TableRow key={`${r.namespace}-${r.name}`}>
+                <TableRow key={`${r.namespace}-${r.name}`} onContextMenu={event => openResourceContextMenu(event, r)}>
                     {commonCells}
                     <TableCell>{r.completions ?? 0}</TableCell>
                     <TableCell>{r.active ?? 0}</TableCell>
@@ -1687,7 +1803,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
             );
         case 'daemonsets':
              return (
-                <TableRow key={`${r.namespace}-${r.name}`}>
+                <TableRow key={`${r.namespace}-${r.name}`} onContextMenu={event => openResourceContextMenu(event, r)}>
                     {commonCells}
                     <TableCell>{r.desired}</TableCell>
                     <TableCell><Badge color={r.ready === r.desired ? 'success' : 'warning'}>{r.ready}</Badge></TableCell>
@@ -1696,7 +1812,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
             );
         case 'cronjobs':
             return (
-                <TableRow key={`${r.namespace}-${r.name}`}>
+                <TableRow key={`${r.namespace}-${r.name}`} onContextMenu={event => openResourceContextMenu(event, r)}>
                     {commonCells}
                     <TableCell><code>{r.schedule}</code></TableCell>
                     <TableCell><Badge appearance="outline">{r.active}</Badge></TableCell>
@@ -1709,10 +1825,10 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
             {
                 const forward = activePortForwards.find(f => f.namespace === r.namespace && f.service_name === r.name);
                 return (
-                    <TableRow key={`${r.namespace}-${r.name}`}>
+                    <TableRow key={`${r.namespace}-${r.name}`} onContextMenu={event => openResourceContextMenu(event, r)}>
                         <TableCell>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                                <span className={styles.clickableName} onClick={() => setSelectedResource({ type: 'services', name: r.name, namespace: r.namespace })} onContextMenu={event => openResourceContextMenu(event, r)}>{r.name}</span>
+                                <span title={r.name} className={`${styles.clickableName} ${styles.truncatedName}`} onClick={() => setSelectedResource({ type: 'services', name: r.name, namespace: r.namespace })} onContextMenu={event => openResourceContextMenu(event, r)}>{r.name}</span>
                                 {forward && (
                                     <span style={{ fontSize: '0.75rem', color: 'var(--colorPaletteGreenForeground1)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                                         <Link20Regular style={{ width: '12px', height: '12px' }} />
@@ -1738,7 +1854,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
         case 'ingresses':
         case 'other_ingresses':
             return (
-                <TableRow key={`${r.namespace}-${r.name}`}>
+                <TableRow key={`${r.namespace}-${r.name}`} onContextMenu={event => openResourceContextMenu(event, r)}>
                     {commonCells}
                     <TableCell>
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px' }}>
@@ -1754,9 +1870,18 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
                     {actions}
                 </TableRow>
             );
+        case 'secrets':
+            return (
+                <TableRow key={`${r.namespace}-${r.name}`} onContextMenu={event => openResourceContextMenu(event, r)}>
+                    {commonCells}
+                    <TableCell><Badge appearance="tint">{r.type || 'Opaque'}</Badge></TableCell>
+                    <TableCell title={r.tls_info?.subject || ''}>{r.tls_info ? <div className={styles.truncatedName}><strong>{r.tls_info.subject || 'TLS certificate'}</strong><div style={{ fontSize: '0.75rem', opacity: 0.68 }}>expires {r.tls_info.not_after || '—'}</div></div> : <span style={{ opacity: 0.55 }}>—</span>}</TableCell>
+                    {actions}
+                </TableRow>
+            );
         default:
             return (
-                <TableRow key={r.id || `${r.namespace || 'cls'}-${r.name}`}>
+                <TableRow key={r.id || `${r.namespace || 'cls'}-${r.name}`} onContextMenu={event => openResourceContextMenu(event, r)}>
                     {commonCells}
                     <TableCell><span style={{ fontSize: '0.8rem', opacity: 0.7 }}>{new Date(r.creation_timestamp!).toLocaleString()}</span></TableCell>
                     {actions}
@@ -1870,9 +1995,10 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
   return (
     <div className={styles.container}>
       {feedback.dialog}
+      {backupNamespace && <Dialog open onOpenChange={(_, data) => !data.open && setBackupNamespace(null)}><DialogSurface style={{ width: 'min(760px, calc(100vw - 32px))', maxHeight: 'calc(100vh - 32px)' }}><DialogBody><DialogTitle>Backup namespace · {backupNamespace}</DialogTitle><DialogContent><div style={{ display: 'grid', gap: '14px' }}><div style={{ fontSize: '0.82rem', opacity: 0.7 }}>Select whole kinds or individual resources. The ZIP contains cleaned desired-state manifests; runtime status and server-generated metadata are excluded.</div><div style={{ maxHeight: '52vh', overflowY: 'auto', display: 'grid', gap: '10px', paddingRight: '4px' }}>{backupKinds.map(group => { const selected = backupSelection[group.kind] || []; const all = selected.length === group.resources.length; return <Card key={group.kind} style={{ backgroundColor: 'var(--colorNeutralBackground2)' }}><div style={{ padding: '12px 14px' }}><Checkbox checked={all} onChange={(_, data) => setBackupSelection(current => ({ ...current, [group.kind]: data.checked ? [...group.resources] : [] }))} label={`${group.kind} (${group.resources.length})`} /><div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '10px', paddingLeft: '26px' }}>{group.resources.map(name => <Checkbox key={name} checked={selected.includes(name)} onChange={(_, data) => setBackupSelection(current => ({ ...current, [group.kind]: data.checked ? [...(current[group.kind] || []), name] : (current[group.kind] || []).filter(item => item !== name) }))} label={name} />)}</div></div></Card>; })}{!backupBusy && !backupKinds.length && <span style={{ opacity: 0.65 }}>This namespace has no portable resources to archive.</span>}</div></div></DialogContent><DialogActions><Button appearance="subtle" onClick={() => setBackupNamespace(null)}>Cancel</Button><Button appearance="primary" onClick={downloadNamespaceBackup} disabled={backupBusy}>{backupBusy ? 'Preparing…' : 'Download ZIP'}</Button></DialogActions></DialogBody></DialogSurface></Dialog>}
       {pendingDelete && <Dialog open onOpenChange={(_, data) => !data.open && setPendingDelete(null)}><DialogSurface style={{ width: 'min(560px, calc(100vw - 32px))' }}><DialogBody><DialogTitle>Delete {pendingDelete.type}</DialogTitle><DialogContent><div style={{ display: 'grid', gap: '14px' }}><div style={{ padding: '12px', borderRadius: '8px', background: 'rgba(255, 153, 0, 0.1)', border: '1px solid rgba(255, 153, 0, 0.25)', fontSize: '0.84rem' }}><strong>Review impact</strong><div style={{ marginTop: '5px' }}>You are deleting <code>{pendingDelete.namespace ? `${pendingDelete.namespace}/` : ''}{pendingDelete.name}</code>. {['namespaces', 'nodes'].includes(pendingDelete.type) ? 'This can affect many workloads and is especially high risk.' : pendingDelete.type === 'persistentvolumeclaims' || pendingDelete.type === 'pvcs' ? 'This may make workload data unavailable; the underlying volume behavior depends on its reclaim policy.' : pendingDelete.type === 'services' || pendingDelete.type === 'other_services' ? 'This immediately removes the service endpoint used by clients.' : 'Dependent workloads may be affected.'}</div></div><div style={{ fontSize: '0.82rem', opacity: 0.72 }}>Run a server-side dry-run first to validate authorization and admission policies without removing anything.</div><Button appearance="secondary" onClick={runDeleteDryRun} disabled={isCheckingDelete}>{isCheckingDelete ? 'Running dry-run…' : 'Run dry-run'}</Button>{deleteDryRunResult && <div style={{ padding: '10px', borderRadius: '7px', background: deleteDryRunResult.startsWith('Server-side') ? 'rgba(44,197,126,0.1)' : 'rgba(255,77,99,0.1)', fontSize: '0.8rem' }}>{deleteDryRunResult}</div>}<div style={{ display: 'grid', gap: '6px' }}><Label>Type <code>{pendingDelete.name}</code> to enable deletion</Label><Input autoFocus value={deleteConfirmationText} onChange={(_, data) => setDeleteConfirmationText(data.value)} placeholder={pendingDelete.name} /></div></div></DialogContent><DialogActions><Button appearance="subtle" onClick={() => setPendingDelete(null)}>Cancel</Button><Button appearance="secondary" icon={<Delete20Regular />} disabled={deleteConfirmationText !== pendingDelete.name} onClick={() => executeDeleteResource(false)}>Delete permanently</Button></DialogActions></DialogBody></DialogSurface></Dialog>}
       <Dialog open={isPortForwardManagerOpen} onOpenChange={(_, data) => { setIsPortForwardManagerOpen(data.open); if (data.open) loadActivePortForwards(); }}>
-        <DialogSurface style={{ maxWidth: '760px' }}>
+        <DialogSurface style={{ width: 'min(980px, calc(100vw - 32px))', maxWidth: '980px' }}>
           <DialogBody>
             <DialogTitle>Port Forward Manager</DialogTitle>
             <DialogContent>
@@ -1884,16 +2010,16 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
                 </div>
               </div>
               {activePortForwards.length ? (
-                <Table size="small">
+                <div style={{ overflowX: 'auto' }}><Table size="small" style={{ minWidth: '760px' }}>
                   <TableHeader><TableRow><TableHeaderCell>Service</TableHeaderCell><TableHeaderCell>URL</TableHeaderCell><TableHeaderCell>Status</TableHeaderCell><TableHeaderCell /></TableRow></TableHeader>
                   <TableBody>
                     {activePortForwards.map(session => (
                       <TableRow key={`${session.namespace}-${session.service_name}`}>
                         <TableCell><strong>{session.service_name}</strong><div style={{ fontSize: '0.75rem', opacity: 0.65 }}>{session.namespace} · :{session.service_port}</div></TableCell>
-                        <TableCell><code>http://127.0.0.1:{session.local_port}</code></TableCell>
+                        <TableCell><Button appearance="transparent" size="small" style={{ padding: 0, minWidth: 0, fontFamily: 'var(--fontFamilyMonospace)' }} onClick={() => handleOpenPortForwardUrl(session)}>http://127.0.0.1:{session.local_port}</Button></TableCell>
                         <TableCell><Badge color="success" appearance="tint">{session.status || 'active'}</Badge></TableCell>
                         <TableCell>
-                          <div style={{ display: 'flex', gap: '4px' }}>
+                          <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                             <Button size="small" appearance="subtle" onClick={() => handleCopyPortForwardUrl(session)}>Copy URL</Button>
                             <Button size="small" appearance="subtle" icon={<ArrowClockwise20Regular />} onClick={() => handleReconnectPortForward(session)}>Reconnect</Button>
                             <Button size="small" appearance="subtle" onClick={() => handleStopPortForward(session.namespace, session.service_name)}>Stop</Button>
@@ -1902,7 +2028,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
                       </TableRow>
                     ))}
                   </TableBody>
-                </Table>
+                </Table></div>
               ) : <div style={{ textAlign: 'center', padding: '36px 0', opacity: 0.65 }}>No active port forwards in this context.</div>}
             </DialogContent>
             <DialogActions><Button appearance="primary" onClick={() => setIsPortForwardManagerOpen(false)}>Close</Button></DialogActions>
@@ -2345,11 +2471,25 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
                       <div style={{ display: 'flex', flexDirection: 'column' }}>
                           <Title2 style={{ fontSize: '1.25rem' }}>{selectedResource.name}</Title2>
                           <Subtitle2 style={{ opacity: 0.6, fontSize: '0.75rem' }}>{getPageTitle()} Detail</Subtitle2>
+                          {selectedResource.type === 'deployments' && resourceDetail && <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '8px' }}>
+                            <span style={{ fontSize: '0.78rem', opacity: 0.7 }}>Replicas</span>
+                            <Button size="small" appearance="subtle" onClick={() => handleScaleDeployment({ name: selectedResource.name, namespace: selectedResource.namespace, replicas: resourceDetail.spec?.replicas ?? 0 }, Math.max(0, (resourceDetail.spec?.replicas ?? 0) - 1))}>−</Button>
+                            <strong style={{ minWidth: '18px', textAlign: 'center', fontSize: '0.85rem' }}>{resourceDetail.spec?.replicas ?? 0}</strong>
+                            <Button size="small" appearance="subtle" onClick={() => handleScaleDeployment({ name: selectedResource.name, namespace: selectedResource.namespace, replicas: resourceDetail.spec?.replicas ?? 0 }, (resourceDetail.spec?.replicas ?? 0) + 1)}>+</Button>
+                            <Button size="small" appearance="secondary" icon={<ArrowClockwise20Regular />} onClick={() => handleRedeploy(selectedResource.namespace, selectedResource.name)}>Rollout restart</Button>
+                          </div>}
                       </div>
                   </div>
               )}
             </div>
             <div className={styles.headerControls}>
+              {context && selectedResource && <>
+                {selectedResource.type === 'namespaces' && <><Button appearance="secondary" size="small" onClick={() => openNamespaceBackup(selectedResource.name)}>Backup</Button><Button appearance="subtle" size="small" onClick={() => restoreNamespaceBackup(selectedResource.name)} disabled={backupBusy}>Restore ZIP</Button></>}
+                {CREATE_KIND_BY_VIEW[selectedResource.type] && <Button appearance="secondary" size="small" onClick={openResourceFormEditor}>Edit in form</Button>}
+                <Button appearance="subtle" size="small" icon={<Document20Regular />} onClick={() => handleOpenYaml(selectedResource.namespace || 'none', selectedResource.name, resourceTypeForAction(selectedResource.type))}>Edit YAML</Button>
+                <Button appearance="subtle" size="small" onClick={() => handleSaveResourceYaml({ name: selectedResource.name, namespace: selectedResource.namespace })}>Save YAML</Button>
+                <Button appearance="subtle" size="small" icon={<Delete20Regular />} onClick={() => handleDeleteResource(selectedResource.namespace, selectedResource.name, selectedResource.type)}>Delete</Button>
+              </>}
               {context && !selectedResource && ['overview', 'nodes', 'services', 'other_services'].includes(activeView) && (
                 <>
                   <Button appearance="subtle" size="small" icon={<Link20Regular />} onClick={() => setIsPortForwardManagerOpen(true)}>
@@ -2368,10 +2508,10 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
                   }}>
                     Create Resource
                   </Button>
-                  <Dialog open={isApplyYamlOpen} onOpenChange={(_, data) => setIsApplyYamlOpen(data.open)}>
+                  <Dialog open={isApplyYamlOpen} onOpenChange={(_, data) => { setIsApplyYamlOpen(data.open); if (!data.open) setFormEditTarget(null); }}>
                     <DialogSurface style={{ width: 'min(960px, calc(100vw - 32px))', maxWidth: '960px', maxHeight: 'calc(100vh - 32px)' }}>
                       <DialogBody>
-                        <DialogTitle>Create {createKind}</DialogTitle>
+                        <DialogTitle>{formEditTarget ? `Edit ${createKind}` : `Create ${createKind}`}</DialogTitle>
                         <DialogContent>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', overflowY: 'auto', maxHeight: 'calc(100vh - 190px)', paddingRight: '4px' }}>
                             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 0.9fr) minmax(220px, 1.2fr) minmax(140px, 0.65fr)', gap: '14px' }}>
@@ -2407,7 +2547,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
                           </div>
                         </DialogContent>
                         <DialogActions>
-                          <Button appearance="subtle" onClick={() => setIsApplyYamlOpen(false)} disabled={isApplyingYaml}>Cancel</Button>
+                          <Button appearance="subtle" onClick={() => { setIsApplyYamlOpen(false); setFormEditTarget(null); }} disabled={isApplyingYaml}>Cancel</Button>
                           <Button appearance="primary" icon={<Add20Regular />} onClick={handleApplyYaml} disabled={!yamlToApply.trim() || isApplyingYaml}>
                             {isApplyingYaml ? 'Applying…' : 'Apply YAML'}
                           </Button>
@@ -2952,6 +3092,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
                 )
             ) : activeView === 'helm' ? (
                 <div style={{ display: 'grid', gap: '16px' }}>
+                  {helmError && <Card className={styles.tableCard} style={{ borderColor: 'rgba(255, 166, 0, 0.45)' }}><div style={{ padding: '14px 18px' }}><Title3>Helm releases could not be loaded</Title3><div style={{ fontSize: '0.82rem', opacity: 0.72, marginTop: '5px' }}>{helmError}</div><div style={{ fontSize: '0.78rem', opacity: 0.6, marginTop: '8px' }}>The Kubernetes connection remains available. Check that Helm is installed and that this context is reachable by the Helm CLI.</div></div></Card>}
                   {helmRelease && <Dialog open onOpenChange={(_, data) => !data.open && setHelmRelease(null)}><DialogSurface style={{ width: 'min(920px, calc(100vw - 32px))' }}><DialogBody><DialogTitle>{helmRelease.name} · Helm history</DialogTitle><DialogContent><div style={{ display: 'grid', gap: '14px' }}><Table><TableHeader><TableRow><TableHeaderCell>Revision</TableHeaderCell><TableHeaderCell>Status</TableHeaderCell><TableHeaderCell>Chart</TableHeaderCell><TableHeaderCell>Updated</TableHeaderCell><TableHeaderCell /></TableRow></TableHeader><TableBody>{helmHistory.map(item => <TableRow key={item.revision}><TableCell>{item.revision}</TableCell><TableCell><Badge color={item.status === 'deployed' ? 'success' : 'warning'}>{item.status}</Badge></TableCell><TableCell>{item.chart}</TableCell><TableCell>{item.updated}</TableCell><TableCell><Button size="small" appearance="secondary" onClick={async () => { if (!await feedback.confirm('Rollback Helm release?', `Rollback ${helmRelease.name} to revision ${item.revision}?`, { confirmLabel: 'Rollback', destructive: true })) return; await apiFetch(`/api/helm/${context}/releases/${encodeURIComponent(helmRelease.namespace)}/${encodeURIComponent(helmRelease.name)}/rollback`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ revision: item.revision }) }); setHelmRelease(null); loadData(); }}>Rollback</Button></TableCell></TableRow>)}</TableBody></Table><div><Title3>Values diff: latest revision</Title3><pre style={{ maxHeight: '280px', overflow: 'auto', whiteSpace: 'pre-wrap', padding: '12px', borderRadius: '8px', background: 'rgba(0,0,0,0.24)', fontSize: '0.76rem' }}>{helmValuesDiff}</pre></div></div></DialogContent><DialogActions><Button onClick={() => setHelmRelease(null)}>Close</Button></DialogActions></DialogBody></DialogSurface></Dialog>}
                   <div className={styles.overviewGrid}><Card className={styles.metricCard}><Title3>Helm releases</Title3><div style={{ fontSize: '2rem', fontWeight: 700 }}>{helmData?.releases?.length || 0}</div></Card><Card className={styles.metricCard}><Title3>Deployed</Title3><div style={{ fontSize: '2rem', fontWeight: 700 }}>{helmData?.releases?.filter((item: any) => item.status === 'deployed').length || 0}</div></Card></div>
                   <div className={styles.tableCard}><Table><TableHeader><TableRow><TableHeaderCell>Release</TableHeaderCell><TableHeaderCell>Namespace</TableHeaderCell><TableHeaderCell>Status</TableHeaderCell><TableHeaderCell>Chart</TableHeaderCell><TableHeaderCell>App version</TableHeaderCell><TableHeaderCell>Revision</TableHeaderCell></TableRow></TableHeader><TableBody>{helmData?.releases?.map((item: any) => <TableRow key={`${item.namespace}/${item.name}`} onClick={() => openHelmRelease(item)} style={{ cursor: 'pointer' }}><TableCell><strong>{item.name}</strong></TableCell><TableCell>{item.namespace}</TableCell><TableCell><Badge color={item.status === 'deployed' ? 'success' : 'warning'}>{item.status}</Badge></TableCell><TableCell>{item.chart}</TableCell><TableCell>{item.app_version || '—'}</TableCell><TableCell>{item.revision}</TableCell></TableRow>)}</TableBody></Table></div>

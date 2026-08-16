@@ -28,6 +28,7 @@ from backend.api.network import router as network_router
 from backend.api.command_runner import router as command_runner_router
 from backend.api.storage import router as storage_router
 from backend.api.helm import router as helm_router
+from backend.api.backup import router as backup_router
 from backend.cluster.manager import cluster_manager
 
 @asynccontextmanager
@@ -62,6 +63,7 @@ app.include_router(network_router, prefix="/api")
 app.include_router(command_runner_router, prefix="/api")
 app.include_router(storage_router, prefix="/api")
 app.include_router(helm_router, prefix="/api")
+app.include_router(backup_router, prefix="/api")
 
 @app.get("/ping")
 async def ping():

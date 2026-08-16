@@ -6,8 +6,42 @@ from kubernetes_asyncio.watch import Watch
 import asyncio
 import base64
 import json
+import re
 
 router = APIRouter()
+
+
+def parse_memory_quantity(value) -> int:
+    """Convert Kubernetes memory quantities to bytes, including decimal SI values like 400M."""
+    if value is None:
+        return 0
+    text = str(value).strip()
+    if not text:
+        return 0
+
+    match = re.fullmatch(r"([+-]?(?:\d+(?:\.\d*)?|\.\d+))(Ki|Mi|Gi|Ti|Pi|Ei|K|M|G|T|P|E|m)?", text)
+    if not match:
+        return 0
+
+    amount = float(match.group(1))
+    unit = match.group(2) or ""
+    multipliers = {
+        "": 1,
+        "m": 0.001,
+        "K": 1000,
+        "M": 1000 ** 2,
+        "G": 1000 ** 3,
+        "T": 1000 ** 4,
+        "P": 1000 ** 5,
+        "E": 1000 ** 6,
+        "Ki": 1024,
+        "Mi": 1024 ** 2,
+        "Gi": 1024 ** 3,
+        "Ti": 1024 ** 4,
+        "Pi": 1024 ** 5,
+        "Ei": 1024 ** 6,
+    }
+    return int(amount * multipliers[unit])
 
 
 def workload_restart_counts(workloads, pods):
@@ -103,25 +137,7 @@ async def get_overview(context_name: str):
             except:
                 return 0
 
-        def parse_mem(mem_str):
-            if not mem_str: return 0
-            mem_str = str(mem_str).strip()
-            units = {
-                'K': 1024, 'M': 1024**2, 'G': 1024**3, 'T': 1024**4, 'P': 1024**5, 'E': 1024**6,
-                'Ki': 1024, 'Mi': 1024**2, 'Gi': 1024**3, 'Ti': 1024**4, 'Pi': 1024**5, 'Ei': 1024**6,
-                'k': 1000, 'm': 1000**2, 'g': 1000**3, 't': 1000**4, 'p': 1000**5, 'e': 1000**6,
-                'kb': 1000, 'mb': 1000**2, 'gb': 1000**3
-            }
-            for unit, multiplier in sorted(units.items(), key=lambda x: len(x[0]), reverse=True):
-                if mem_str.endswith(unit):
-                    try:
-                        return int(float(mem_str[:-len(unit)].strip()) * multiplier)
-                    except:
-                        pass
-            try:
-                return int(float(mem_str))
-            except:
-                return 0
+        parse_mem = parse_memory_quantity
 
         for n in nodes.items:
             # Architecture
@@ -189,12 +205,7 @@ async def get_nodes(context_name: str):
             if cpu_str.endswith('m'): return int(cpu_str[:-1])
             return int(cpu_str) * 1000
 
-        def parse_mem(mem_str):
-            if not mem_str: return 0
-            if mem_str.endswith('Ki'): return int(mem_str[:-2]) * 1024
-            if mem_str.endswith('Mi'): return int(mem_str[:-2]) * 1024 * 1024
-            if mem_str.endswith('Gi'): return int(mem_str[:-2]) * 1024 * 1024 * 1024
-            return int(mem_str)
+        parse_mem = parse_memory_quantity
 
         # Calculate reservations per node
         node_stats = {n.metadata.name: {"cpu": 0, "mem": 0, "pods": 0} for n in nodes.items}
@@ -341,17 +352,20 @@ async def get_secrets(context_name: str, namespace: str = None):
             items = await v1.list_namespaced_secret(namespace)
         else:
             items = await v1.list_secret_for_all_namespaces()
-        return {
-            "items": [
-                {
-                    "name": i.metadata.name,
-                    "namespace": i.metadata.namespace,
-                    "type": i.type,
-                    "data_count": len(i.data) if i.data else 0,
-                    "creation_timestamp": i.metadata.creation_timestamp
-                } for i in items.items
-            ]
-        }
+        result = []
+        for item in items.items:
+            tls_info = None
+            if item.type == "kubernetes.io/tls" and item.data and item.data.get("tls.crt"):
+                tls_info = await inspect_tls_certificate(item.data["tls.crt"])
+            result.append({
+                "name": item.metadata.name,
+                "namespace": item.metadata.namespace,
+                "type": item.type,
+                "data_count": len(item.data) if item.data else 0,
+                "tls_info": tls_info,
+                "creation_timestamp": item.metadata.creation_timestamp,
+            })
+        return {"items": result}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -616,25 +630,7 @@ async def get_namespace_details(context_name: str, name: str):
             except:
                 return 0
 
-        def parse_mem(mem_str):
-            if not mem_str: return 0
-            mem_str = str(mem_str).strip()
-            units = {
-                'K': 1024, 'M': 1024**2, 'G': 1024**3, 'T': 1024**4, 'P': 1024**5, 'E': 1024**6,
-                'Ki': 1024, 'Mi': 1024**2, 'Gi': 1024**3, 'Ti': 1024**4, 'Pi': 1024**5, 'Ei': 1024**6,
-                'k': 1000, 'm': 1000**2, 'g': 1000**3, 't': 1000**4, 'p': 1000**5, 'e': 1000**6,
-                'kb': 1000, 'mb': 1000**2, 'gb': 1000**3
-            }
-            for unit, multiplier in sorted(units.items(), key=lambda x: len(x[0]), reverse=True):
-                if mem_str.endswith(unit):
-                    try:
-                        return int(float(mem_str[:-len(unit)].strip()) * multiplier)
-                    except:
-                        pass
-            try:
-                return int(float(mem_str))
-            except:
-                return 0
+        parse_mem = parse_memory_quantity
 
         def get_items_list(res):
             if isinstance(res, Exception):
@@ -992,6 +988,9 @@ async def delete_resource(context_name: str, resource_type: str, namespace: str,
         elif resource_type == "pvcs":
             v1 = CoreV1Api(client)
             await v1.delete_namespaced_persistent_volume_claim(name, target_namespace, **delete_options)
+        elif resource_type == "persistentvolumes":
+            v1 = CoreV1Api(client)
+            await v1.delete_persistent_volume(name, **delete_options)
         elif resource_type == "namespaces":
             v1 = CoreV1Api(client)
             await v1.delete_namespace(name, **delete_options)

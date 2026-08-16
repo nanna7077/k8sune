@@ -1,52 +1,96 @@
 from fastapi import APIRouter, HTTPException, Body
 from backend.cluster.manager import cluster_manager
-from kubernetes_asyncio import client, config, utils
+from kubernetes_asyncio import client, utils
 import yaml
 import json
 
 router = APIRouter()
+
+
+def normalized_type(resource_type: str) -> str:
+    """Map dashboard aliases to the Kubernetes resource plural."""
+    return {
+        "other_services": "services",
+        "other_ingresses": "ingresses",
+        "other_replicasets": "replicasets",
+        "other_jobs": "jobs",
+        "pvcs": "persistentvolumeclaims",
+    }.get(resource_type, resource_type)
+
+
+async def read_resource(api_client, resource_type: str, namespace: str, name: str):
+    resource_type = normalized_type(resource_type)
+    core, apps, batch, networking, rbac = client.CoreV1Api(api_client), client.AppsV1Api(api_client), client.BatchV1Api(api_client), client.NetworkingV1Api(api_client), client.RbacAuthorizationV1Api(api_client)
+    namespaced = {
+        "pods": (core, "read_namespaced_pod"), "configmaps": (core, "read_namespaced_config_map"),
+        "secrets": (core, "read_namespaced_secret"), "persistentvolumeclaims": (core, "read_namespaced_persistent_volume_claim"),
+        "services": (core, "read_namespaced_service"), "deployments": (apps, "read_namespaced_deployment"),
+        "serviceaccounts": (core, "read_namespaced_service_account"),
+        "statefulsets": (apps, "read_namespaced_stateful_set"), "daemonsets": (apps, "read_namespaced_daemon_set"),
+        "replicasets": (apps, "read_namespaced_replica_set"), "cronjobs": (batch, "read_namespaced_cron_job"),
+        "jobs": (batch, "read_namespaced_job"), "ingresses": (networking, "read_namespaced_ingress"),
+        "networkpolicies": (networking, "read_namespaced_network_policy"),
+        "roles": (rbac, "read_namespaced_role"), "rolebindings": (rbac, "read_namespaced_role_binding"),
+    }
+    cluster_scoped = {
+        "nodes": (core, "read_node"), "namespaces": (core, "read_namespace"),
+        "persistentvolumes": (core, "read_persistent_volume"),
+    }
+    if resource_type.startswith("custom_"):
+        _, group, version, plural = resource_type.split("_", 3)
+        custom = client.CustomObjectsApi(api_client)
+        return await custom.get_namespaced_custom_object(group, version, namespace, plural, name) if namespace not in ("", "none", "undefined") else await custom.get_cluster_custom_object(group, version, plural, name)
+    if resource_type in namespaced:
+        api, method = namespaced[resource_type]
+        return await getattr(api, method)(name, namespace)
+    if resource_type in cluster_scoped:
+        api, method = cluster_scoped[resource_type]
+        return await getattr(api, method)(name)
+    raise HTTPException(status_code=400, detail=f"Unsupported resource type: {resource_type}")
+
+
+async def patch_resource(api_client, resource_type: str, namespace: str, name: str, body: dict):
+    resource_type = normalized_type(resource_type)
+    core, apps, batch, networking, rbac = client.CoreV1Api(api_client), client.AppsV1Api(api_client), client.BatchV1Api(api_client), client.NetworkingV1Api(api_client), client.RbacAuthorizationV1Api(api_client)
+    namespaced = {
+        "pods": (core, "patch_namespaced_pod"), "configmaps": (core, "patch_namespaced_config_map"),
+        "secrets": (core, "patch_namespaced_secret"), "persistentvolumeclaims": (core, "patch_namespaced_persistent_volume_claim"),
+        "services": (core, "patch_namespaced_service"), "deployments": (apps, "patch_namespaced_deployment"),
+        "serviceaccounts": (core, "patch_namespaced_service_account"),
+        "statefulsets": (apps, "patch_namespaced_stateful_set"), "daemonsets": (apps, "patch_namespaced_daemon_set"),
+        "replicasets": (apps, "patch_namespaced_replica_set"), "cronjobs": (batch, "patch_namespaced_cron_job"),
+        "jobs": (batch, "patch_namespaced_job"), "ingresses": (networking, "patch_namespaced_ingress"),
+        "networkpolicies": (networking, "patch_namespaced_network_policy"),
+        "roles": (rbac, "patch_namespaced_role"), "rolebindings": (rbac, "patch_namespaced_role_binding"),
+    }
+    cluster_scoped = {"nodes": (core, "patch_node"), "namespaces": (core, "patch_namespace"), "persistentvolumes": (core, "patch_persistent_volume")}
+    if resource_type.startswith("custom_"):
+        _, group, version, plural = resource_type.split("_", 3)
+        custom = client.CustomObjectsApi(api_client)
+        if namespace not in ("", "none", "undefined"):
+            return await custom.patch_namespaced_custom_object(group, version, namespace, plural, name, body)
+        return await custom.patch_cluster_custom_object(group, version, plural, name, body)
+    if resource_type in namespaced:
+        api, method = namespaced[resource_type]
+        return await getattr(api, method)(name, namespace, body)
+    if resource_type in cluster_scoped:
+        api, method = cluster_scoped[resource_type]
+        return await getattr(api, method)(name, body)
+    raise HTTPException(status_code=400, detail=f"Unsupported resource type: {resource_type}")
 
 @router.get("/yaml/{context_name}/{resource_type}/{namespace}/{name}")
 async def get_resource_yaml(context_name: str, resource_type: str, namespace: str, name: str):
     api_client = await cluster_manager.get_client(context_name)
     
     try:
-        if resource_type == "pods":
-            api = client.CoreV1Api(api_client)
-            resp = await api.read_namespaced_pod(name, namespace)
-        elif resource_type == "configmaps":
-            api = client.CoreV1Api(api_client)
-            resp = await api.read_namespaced_config_map(name, namespace)
-        elif resource_type == "secrets":
-            api = client.CoreV1Api(api_client)
-            resp = await api.read_namespaced_secret(name, namespace)
-        elif resource_type == "persistentvolumeclaims":
-            api = client.CoreV1Api(api_client)
-            resp = await api.read_namespaced_persistent_volume_claim(name, namespace)
-        elif resource_type == "deployments":
-            api = client.AppsV1Api(api_client)
-            resp = await api.read_namespaced_deployment(name, namespace)
-        elif resource_type == "statefulsets":
-            api = client.AppsV1Api(api_client)
-            resp = await api.read_namespaced_stateful_set(name, namespace)
-        elif resource_type == "daemonsets":
-            api = client.AppsV1Api(api_client)
-            resp = await api.read_namespaced_daemon_set(name, namespace)
-        elif resource_type == "cronjobs":
-            api = client.BatchV1Api(api_client)
-            resp = await api.read_namespaced_cron_job(name, namespace)
-        elif resource_type.startswith("custom_"):
-            _, group, version, plural = resource_type.split("_", 3)
-            api = client.CustomObjectsApi(api_client)
-            resp = await api.get_namespaced_custom_object(group, version, namespace, plural, name)
-        else:
-            raise HTTPException(status_code=400, detail="Unsupported resource type")
+        resp = await read_resource(api_client, resource_type, namespace, name)
 
         # Keep an editable manifest focused on desired state, not controller-managed status.
         obj = api_client.sanitize_for_serialization(resp)
         obj.pop("status", None)
         if isinstance(obj.get("metadata"), dict):
-            obj["metadata"].pop("managedFields", None)
+            for field in ("managedFields", "resourceVersion", "uid", "creationTimestamp", "generation", "selfLink"):
+                obj["metadata"].pop(field, None)
         # Convert to YAML
         return {"yaml": yaml.dump(obj, sort_keys=False)}
     except Exception as e:
@@ -61,36 +105,7 @@ async def apply_resource_yaml(context_name: str, resource_type: str, namespace: 
         if not isinstance(new_obj, dict):
             raise HTTPException(status_code=400, detail="The resource YAML must contain an object.")
         
-        if resource_type == "pods":
-            api = client.CoreV1Api(api_client)
-            await api.patch_namespaced_pod(name, namespace, new_obj)
-        elif resource_type == "configmaps":
-            api = client.CoreV1Api(api_client)
-            await api.patch_namespaced_config_map(name, namespace, new_obj)
-        elif resource_type == "secrets":
-            api = client.CoreV1Api(api_client)
-            await api.patch_namespaced_secret(name, namespace, new_obj)
-        elif resource_type == "persistentvolumeclaims":
-            api = client.CoreV1Api(api_client)
-            await api.patch_namespaced_persistent_volume_claim(name, namespace, new_obj)
-        elif resource_type == "deployments":
-            api = client.AppsV1Api(api_client)
-            await api.patch_namespaced_deployment(name, namespace, new_obj)
-        elif resource_type == "statefulsets":
-            api = client.AppsV1Api(api_client)
-            await api.patch_namespaced_stateful_set(name, namespace, new_obj)
-        elif resource_type == "daemonsets":
-            api = client.AppsV1Api(api_client)
-            await api.patch_namespaced_daemon_set(name, namespace, new_obj)
-        elif resource_type == "cronjobs":
-            api = client.BatchV1Api(api_client)
-            await api.patch_namespaced_cron_job(name, namespace, new_obj)
-        elif resource_type.startswith("custom_"):
-            _, group, version, plural = resource_type.split("_", 3)
-            api = client.CustomObjectsApi(api_client)
-            await api.patch_namespaced_custom_object(group, version, namespace, plural, name, new_obj)
-        else:
-            raise HTTPException(status_code=400, detail="Unsupported resource type")
+        await patch_resource(api_client, resource_type, namespace, name, new_obj)
             
         return {"status": "ok"}
     except Exception as e:
