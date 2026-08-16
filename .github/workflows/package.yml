@@ -64,6 +64,10 @@ jobs:
         run: |
           pip3 install -t backend/libs -r backend/requirements.txt
 
+      - name: Verify bundled Python dependencies
+        run: |
+          PYTHONPATH=backend/libs python3 -c "import fastapi, kubernetes, kubernetes_asyncio, sse_starlette, uvicorn, websockets, yaml"
+
       - name: Build Tauri application
         run: |
           if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
@@ -238,5 +242,4 @@ jobs:
           git add Formula/k8sune.rb Casks/k8sune.rb
           git commit -m "Release ${VERSION}" || echo "No changes to commit"
           git push origin main
-
 

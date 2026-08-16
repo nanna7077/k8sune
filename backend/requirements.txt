@@ -4,3 +4,4 @@ kubernetes
 kubernetes-asyncio
 pyyaml
 websockets
+sse-starlette
