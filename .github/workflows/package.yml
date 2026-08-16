@@ -84,6 +84,47 @@ jobs:
         run: |
           PYTHONPATH=backend/libs python3 -c "import fastapi, kubernetes, kubernetes_asyncio, sse_starlette, uvicorn, websockets, yaml"
 
+      - name: Derive package version from release tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 <<'PY'
+          import json
+          import os
+          import re
+
+          tag = os.environ['RELEASE_TAG']
+          raw = tag[1:] if tag.startswith('v') else tag
+          semver = raw
+          if not re.fullmatch(r'\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?', semver):
+              # Existing tags such as 0.0.2b-test5 are useful display labels,
+              # but Cargo/Tauri require strict SemVer for bundle metadata.
+              match = re.fullmatch(r'(\d+\.\d+\.\d+)b-([0-9A-Za-z.-]+)', raw)
+              if not match:
+                  raise SystemExit(f'Cannot derive a Cargo/Tauri SemVer from tag {tag}. Use vX.Y.Z[-pre] or vX.Y.Zb-pre.')
+              semver = f'{match.group(1)}-beta.{match.group(2)}'
+
+          with open('src-tauri/tauri.conf.json', encoding='utf-8') as source:
+              config = json.load(source)
+          config['version'] = semver
+          with open('src-tauri/tauri.conf.json', 'w', encoding='utf-8') as target:
+              json.dump(config, target, indent=2)
+              target.write('\n')
+
+          cargo_path = 'src-tauri/Cargo.toml'
+          with open(cargo_path, encoding='utf-8') as source:
+              cargo = source.read()
+          cargo, replacements = re.subn(r'(?m)^version = "[^"]+"$', f'version = "{semver}"', cargo, count=1)
+          if replacements != 1:
+              raise SystemExit('Could not update the package version in src-tauri/Cargo.toml')
+          with open(cargo_path, 'w', encoding='utf-8') as target:
+              target.write(cargo)
+
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env_file:
+              env_file.write(f'K8SUNE_RELEASE_TAG={tag}\nK8SUNE_PACKAGE_VERSION={semver}\n')
+          print(f'Building {tag} with Cargo/Tauri package version {semver}')
+          PY
+
       - name: Build Tauri application
         run: |
           if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
@@ -95,6 +136,7 @@ jobs:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
           APPIMAGE_EXTRACT_AND_RUN: 1
+          VITE_APP_VERSION: ${{ github.ref_name }}
 
       - name: Sign and notarize DMG
         if: matrix.os == 'macos-latest' && env.APPLE_CERTIFICATE != ''
@@ -236,13 +278,17 @@ jobs:
           CASK_PATH="tap/Casks/k8sune.rb"
           DMG_SHA_FILE=$(find download-artifacts/tauri-build-artifacts-macos-latest -name "*.dmg.sha256" | head -n 1)
           DMG_SHA=$(cat "$DMG_SHA_FILE" | tr -d '\r\n[:space:]')
+          # Tauri names bundles from its package version, which may differ from
+          # a release tag (for example pre-release tags). Always publish the
+          # exact asset basename produced by the build instead of guessing it.
+          DMG_NAME=$(basename "$DMG_SHA_FILE" .sha256)
 
           cat > "$CASK_PATH" <<EOF3
           cask "k8sune" do
             version "${VERSION}"
             sha256 "${DMG_SHA}"
 
-            url "https://github.com/${REPO}/releases/download/${RELEASE_TAG}/k8sune_${VERSION}_universal.dmg"
+            url "https://github.com/${REPO}/releases/download/${RELEASE_TAG}/${DMG_NAME}"
             name "k8sune"
             desc "Modern and integrated desktop controller for Kubernetes"
             homepage "https://github.com/${REPO}"

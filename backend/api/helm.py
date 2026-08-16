@@ -56,7 +56,8 @@ async def _live_resource(api_client, desired):
         base_path = f'/apis/{quote(group, safe=".")}/{quote(version, safe="")}'
     else:
         base_path = f'/api/{quote(api_version, safe="")}'
-    discovery = await api_client.call_api(base_path, 'GET', response_type='object', _return_http_data_only=True)
+    response_types_map = {'200': 'object'}
+    discovery = await api_client.call_api(base_path, 'GET', response_types_map=response_types_map, _return_http_data_only=True)
     resources = discovery.get('resources', []) if isinstance(discovery, dict) else []
     resource = next((item for item in resources if item.get('kind') == kind and '/' not in item.get('name', '')), None)
     if not resource:
@@ -69,7 +70,7 @@ async def _live_resource(api_client, desired):
         path = f"{base_path}/namespaces/{quote(namespace, safe='')}/{resource['name']}/{quote(name, safe='')}"
     else:
         path = f"{base_path}/{resource['name']}/{quote(name, safe='')}"
-    return await api_client.call_api(path, 'GET', response_type='object', _return_http_data_only=True)
+    return await api_client.call_api(path, 'GET', response_types_map=response_types_map, _return_http_data_only=True)
 
 
 async def helm(context: str, *args: str) -> str:
@@ -186,15 +187,14 @@ async def resource_drift(context_name: str, namespace: str, name: str, revision:
         except Exception as error:
             message = str(error)
             if '404' in message or 'Not Found' in message:
-                missing.append(resource_id)
+                missing.append({'resource': resource_id, 'expected': yaml.safe_dump(_clean_manifest(desired), sort_keys=False)})
             else:
                 errors.append({'resource': resource_id, 'error': message})
             continue
         expected_yaml = yaml.safe_dump(_clean_manifest(desired), sort_keys=False).splitlines(True)
         actual_yaml = yaml.safe_dump(_clean_manifest(live), sort_keys=False).splitlines(True)
-        diff = ''.join(difflib.unified_diff(expected_yaml, actual_yaml, fromfile=f'expected/{resource_id}', tofile=f'live/{resource_id}'))
-        if diff:
-            changes.append({'resource': resource_id, 'diff': diff})
+        if expected_yaml != actual_yaml:
+            changes.append({'resource': resource_id, 'expected': ''.join(expected_yaml), 'actual': ''.join(actual_yaml)})
         else:
             unchanged += 1
     return {'changes': changes, 'missing': missing, 'errors': errors, 'unchanged': unchanged, 'total': len(seen)}

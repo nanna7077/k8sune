@@ -84,11 +84,14 @@ import { EventTimeline } from './EventTimeline';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { readTextFile, readFile, writeTextFile, writeFile } from '@tauri-apps/plugin-fs';
 import { getVersion } from '@tauri-apps/api/app';
+import { DiffEditor } from '@monaco-editor/react';
 
 const useStyles = makeStyles({
   container: {
     display: 'flex',
     height: '100%',
+    minHeight: 0,
+    maxHeight: '100%',
     width: '100%',
     backgroundColor: 'transparent',
     backgroundImage: 'var(--app-gradient)',
@@ -109,17 +112,16 @@ const useStyles = makeStyles({
   },
   mainContainer: {
     flex: 1,
-    display: 'flex',
-    flexDirection: 'column',
+    display: 'grid',
     height: '100%',
     minHeight: 0,
     minWidth: 0,
     overflow: 'hidden'
   },
   main: {
-    flex: 1,
-    display: 'flex',
-    flexDirection: 'column',
+    display: 'grid',
+    gridTemplateRows: 'auto minmax(0, 1fr)',
+    height: '100%',
     overflow: 'hidden',
     minHeight: 0,
     minWidth: 0,
@@ -165,10 +167,8 @@ const useStyles = makeStyles({
     backdropFilter: 'blur(16px)',
   },
   content: {
-    flexGrow: 1,
-    flexShrink: 1,
-    flexBasis: 0,
-    height: 0,
+    minHeight: 0,
+    height: 'auto',
     overflowY: 'auto',
     overflowX: 'hidden',
     ...shorthands.padding('1.75rem'),
@@ -176,7 +176,6 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: '1.25rem',
     backgroundColor: 'transparent',
-    minHeight: 0,
     minWidth: 0,
   },
   tableCard: {
@@ -381,6 +380,27 @@ const ConfigMapEditorDetail = ({ context, resource }: { context: string; resourc
   </div>
 );
 
+const HelmDriftViewer = ({ drift, selectedResource, onSelect }: { drift: any; selectedResource: string | null; onSelect: (resource: string) => void }) => {
+  const changes = drift.changes || [];
+  const missing = drift.missing || [];
+  const selected = changes.find((item: any) => item.resource === selectedResource) || changes[0];
+  return <div style={{ display: 'grid', gap: '10px' }}>
+    <div style={{ fontSize: '0.82rem', opacity: 0.72 }}><strong>{changes.length}</strong> changed · <strong>{missing.length}</strong> missing · <strong>{drift.unchanged || 0}</strong> in sync of {drift.total || 0} rendered resources</div>
+    {changes.length > 0 && <div style={{ display: 'grid', gridTemplateColumns: 'minmax(185px, 0.32fr) minmax(0, 1fr)', minHeight: '420px', border: '1px solid var(--colorNeutralStroke2)', borderRadius: '9px', overflow: 'hidden' }}>
+      <div style={{ padding: '8px', overflowY: 'auto', borderRight: '1px solid var(--colorNeutralStroke2)', background: 'rgba(255,255,255,0.018)' }}>
+        <div style={{ padding: '7px 8px', fontSize: '0.72rem', opacity: 0.62 }}>DRIFTED RESOURCES</div>
+        {changes.map((item: any) => <Button key={item.resource} appearance={item.resource === selected?.resource ? 'secondary' : 'subtle'} size="small" style={{ width: '100%', justifyContent: 'flex-start', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.resource} onClick={() => onSelect(item.resource)}>{item.resource}</Button>)}
+      </div>
+      <div style={{ minWidth: 0, display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr)' }}>
+        <div style={{ padding: '9px 12px', display: 'flex', justifyContent: 'space-between', gap: '12px', fontSize: '0.75rem', borderBottom: '1px solid var(--colorNeutralStroke2)' }}><span>Expected from Helm</span><span>Applied in cluster</span></div>
+        <DiffEditor height="100%" language="yaml" theme="vs-dark" original={selected?.expected || ''} modified={selected?.actual || ''} options={{ readOnly: true, originalEditable: false, renderSideBySide: true, minimap: { enabled: false }, fontSize: 12, scrollBeyondLastLine: false, wordWrap: 'on' }} />
+      </div>
+    </div>}
+    {missing.map((item: any) => <details key={item.resource}><summary style={{ cursor: 'pointer', fontWeight: 600, color: 'var(--colorPaletteYellowForeground1)' }}>Missing: {item.resource}</summary><pre style={{ margin: '8px 0 0', maxHeight: '180px', overflow: 'auto', whiteSpace: 'pre-wrap', padding: '10px', borderRadius: '7px', background: 'rgba(255,166,0,0.08)', fontSize: '0.74rem' }}>{item.expected}</pre></details>)}
+    {drift.errors?.map((item: any) => <div key={item.resource} style={{ fontSize: '0.78rem', color: 'var(--colorPaletteRedForeground1)' }}>{item.resource}: {item.error}</div>)}
+  </div>;
+};
+
 const CustomResourceSummary = ({ kind, resource }: { kind?: string; resource: ResourceDetail }) => {
   const spec = resource.spec || {};
   const status = resource.status || {};
@@ -555,6 +575,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
   const [helmValuesDiff, setHelmValuesDiff] = useState('');
   const [helmDrift, setHelmDrift] = useState<any | null>(null);
   const [helmDriftLoading, setHelmDriftLoading] = useState(false);
+  const [helmDriftSelection, setHelmDriftSelection] = useState<string | null>(null);
   const [storageSection, setStorageSection] = useState<'pvcs' | 'pvs' | 'classes' | 'attachments' | 'snapshots'>('pvcs');
   const [networkSection, setNetworkSection] = useState<'services' | 'ingresses' | 'policies' | 'endpoints' | 'diagnostics'>('services');
   const [dnsHost, setDnsHost] = useState('kubernetes.default.svc');
@@ -622,6 +643,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
     try {
       setHelmRelease(release);
       setHelmDrift(null);
+      setHelmDriftSelection(null);
       const history = await apiFetch<any>(`/api/helm/${context}/releases/${encodeURIComponent(release.namespace)}/${encodeURIComponent(release.name)}/history`);
       setHelmHistory(history.history || []);
       const revisions = history.history || [];
@@ -636,7 +658,9 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
     if (!helmRelease || !context) return;
     setHelmDriftLoading(true);
     try {
-      setHelmDrift(await apiFetch<any>(`/api/helm/${context}/releases/${encodeURIComponent(helmRelease.namespace)}/${encodeURIComponent(helmRelease.name)}/drift`));
+      const drift = await apiFetch<any>(`/api/helm/${context}/releases/${encodeURIComponent(helmRelease.namespace)}/${encodeURIComponent(helmRelease.name)}/drift`);
+      setHelmDrift(drift);
+      setHelmDriftSelection(drift.changes?.[0]?.resource || null);
     } catch (error: any) {
       feedback.notice('Could not compare release resources', error.message || String(error), 'error');
     } finally {
@@ -1491,8 +1515,9 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
 
   useEffect(() => {
     // Tauri reads this from tauri.conf.json during the build, so a release only
-    // needs its normal package version bump.
-    getVersion().then(setAppVersion).catch(() => setAppVersion(import.meta.env.VITE_APP_VERSION || null));
+    // needs its normal package version bump. Release builds additionally pass
+    // the exact Git tag so the UI matches the artifact a user installed.
+    getVersion().then(version => setAppVersion(import.meta.env.VITE_APP_VERSION || version)).catch(() => setAppVersion(import.meta.env.VITE_APP_VERSION || null));
   }, []);
 
   useEffect(() => {
@@ -3232,14 +3257,18 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
                             </div>
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}><Title3 style={{ fontSize: '0.92rem', lineHeight: 1.2 }}>Values diff · latest revision</Title3><Button size="small" appearance="secondary" onClick={loadHelmDrift} disabled={helmDriftLoading}>{helmDriftLoading ? 'Comparing…' : 'Check resource drift'}</Button></div>
                             <pre style={{ margin: 0, maxHeight: '240px', overflow: 'auto', whiteSpace: 'pre-wrap', padding: '12px', borderRadius: '8px', background: 'rgba(0,0,0,0.24)', fontSize: '0.76rem', lineHeight: 1.45 }}>{helmValuesDiff}</pre>
-                            {helmDrift && <div style={{ display: 'grid', gap: '10px' }}><div style={{ fontSize: '0.82rem', opacity: 0.72 }}><strong>{helmDrift.changes?.length || 0}</strong> changed · <strong>{helmDrift.missing?.length || 0}</strong> missing · <strong>{helmDrift.unchanged || 0}</strong> in sync of {helmDrift.total || 0} rendered resources</div>{helmDrift.changes?.map((change: any) => <details key={change.resource}><summary style={{ cursor: 'pointer', fontWeight: 600 }}>{change.resource}</summary><pre style={{ margin: '8px 0 0', maxHeight: '220px', overflow: 'auto', whiteSpace: 'pre-wrap', padding: '10px', borderRadius: '7px', background: 'rgba(255,166,0,0.08)', fontSize: '0.74rem' }}>{change.diff}</pre></details>)}{helmDrift.missing?.map((resource: string) => <Badge key={resource} color="warning" appearance="tint">Missing: {resource}</Badge>)}{helmDrift.errors?.map((item: any) => <div key={item.resource} style={{ fontSize: '0.78rem', color: 'var(--colorPaletteRedForeground1)' }}>{item.resource}: {item.error}</div>)}</div>}
+                            {helmDrift && <HelmDriftViewer drift={helmDrift} selectedResource={helmDriftSelection} onSelect={setHelmDriftSelection} />}
                           </div>
                         </DialogContent>
                         <DialogActions><Button onClick={() => setHelmRelease(null)}>Close</Button></DialogActions>
                       </DialogBody>
                     </DialogSurface>
                   </Dialog>}
-                  <div className={styles.overviewGrid}><Card className={styles.metricCard}><Title3>Helm releases</Title3><div style={{ fontSize: '2rem', fontWeight: 700 }}>{helmData?.releases?.length || 0}</div></Card><Card className={styles.metricCard}><Title3>Deployed</Title3><div style={{ fontSize: '2rem', fontWeight: 700 }}>{helmData?.releases?.filter((item: any) => item.status === 'deployed').length || 0}</div></Card></div>
+                  <div className={styles.overviewGrid}>
+                    <Card className={styles.metricCard}><Title3>Releases</Title3><div style={{ fontSize: '2rem', fontWeight: 700 }}>{helmData?.releases?.length || 0}</div></Card>
+                    <Card className={styles.metricCard}><Title3>Namespaces</Title3><div style={{ fontSize: '2rem', fontWeight: 700 }}>{new Set((helmData?.releases || []).map((item: any) => item.namespace).filter(Boolean)).size}</div></Card>
+                    <Card className={styles.metricCard}><Title3>Needs attention</Title3><div style={{ fontSize: '2rem', fontWeight: 700 }}>{helmData?.releases?.filter((item: any) => item.status !== 'deployed').length || 0}</div></Card>
+                  </div>
                   <div className={styles.tableCard}><Table><TableHeader><TableRow><TableHeaderCell>Release</TableHeaderCell><TableHeaderCell>Namespace</TableHeaderCell><TableHeaderCell>Status</TableHeaderCell><TableHeaderCell>Chart</TableHeaderCell><TableHeaderCell>App version</TableHeaderCell><TableHeaderCell>Revision</TableHeaderCell></TableRow></TableHeader><TableBody>{helmData?.releases?.map((item: any) => <TableRow key={`${item.namespace}/${item.name}`} onClick={() => openHelmRelease(item)} style={{ cursor: 'pointer' }}><TableCell><strong>{item.name}</strong></TableCell><TableCell>{item.namespace}</TableCell><TableCell><Badge color={item.status === 'deployed' ? 'success' : 'warning'}>{item.status}</Badge></TableCell><TableCell>{item.chart}</TableCell><TableCell>{item.app_version || '—'}</TableCell><TableCell>{item.revision}</TableCell></TableRow>)}</TableBody></Table></div>
                 </div>
             ) : activeView === 'persistentvolumes' ? (
