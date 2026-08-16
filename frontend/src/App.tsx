@@ -53,7 +53,7 @@ function App() {
       <FluentProvider theme={theme} style={{ height: '100%' }}>
         <TitleBar title={`k8sune - Logs [${pod}]`} />
         <WindowResizer />
-        <div style={{ paddingTop: '32px', height: '100%', width: '100%', boxSizing: 'border-box' }}>
+        <div style={{ paddingTop: '32px', height: '100%', minHeight: 0, width: '100%', boxSizing: 'border-box' }}>
           <LogsViewer context={context} namespace={namespace} pod={pod} />
         </div>
       </FluentProvider>
@@ -65,7 +65,7 @@ function App() {
       <FluentProvider theme={theme} style={{ height: '100%' }}>
         <TitleBar title={`k8sune - YAML [${name}]`} />
         <WindowResizer />
-        <div style={{ paddingTop: '32px', height: '100%', width: '100%', boxSizing: 'border-box' }}>
+        <div style={{ paddingTop: '32px', height: '100%', minHeight: 0, width: '100%', boxSizing: 'border-box' }}>
           <YamlEditor context={context} namespace={namespace} name={name} resourceType={resourceType} />
         </div>
       </FluentProvider>
@@ -77,7 +77,7 @@ function App() {
       <FluentProvider theme={theme} style={{ height: '100%' }}>
         <TitleBar title={`k8sune - ${name}`} />
         <WindowResizer />
-        <div style={{ paddingTop: '32px', height: '100%', width: '100%', boxSizing: 'border-box' }}>
+        <div style={{ paddingTop: '32px', height: '100%', minHeight: 0, width: '100%', boxSizing: 'border-box' }}>
           <Dashboard context={context} initialResource={{ type: resourceType, name, namespace: resourceNamespace }} />
         </div>
       </FluentProvider>
@@ -89,7 +89,7 @@ function App() {
       <FluentProvider theme={theme} style={{ height: '100%' }}>
         <TitleBar title={`k8sune - ${view}`} />
         <WindowResizer />
-        <div style={{ paddingTop: '32px', height: '100%', width: '100%', boxSizing: 'border-box' }}>
+        <div style={{ paddingTop: '32px', height: '100%', minHeight: 0, width: '100%', boxSizing: 'border-box' }}>
           <Dashboard context={context} initialView={view} />
         </div>
       </FluentProvider>
@@ -104,7 +104,7 @@ function App() {
     <FluentProvider theme={theme} style={{ height: '100%' }}>
        <TitleBar />
        <WindowResizer />
-       <div style={{ paddingTop: '32px', height: '100%', width: '100%', boxSizing: 'border-box' }}>
+       <div style={{ paddingTop: '32px', height: '100%', minHeight: 0, width: '100%', boxSizing: 'border-box' }}>
           <Dashboard context={context} />
        </div>
     </FluentProvider>

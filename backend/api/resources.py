@@ -7,6 +7,7 @@ import asyncio
 import base64
 import json
 import re
+import time
 
 router = APIRouter()
 
@@ -90,6 +91,17 @@ async def inspect_tls_certificate(encoded_certificate: str) -> dict:
     except Exception as exc:
         return {"error": f"Certificate could not be parsed: {exc}"}
 
+
+def secret_summary(secret) -> str:
+    data = secret.data or {}
+    kind = secret.type or "Opaque"
+    if kind == "kubernetes.io/dockerconfigjson": return "Docker registry credentials"
+    if kind == "kubernetes.io/basic-auth": return "Basic authentication credentials"
+    if kind == "kubernetes.io/ssh-auth": return "SSH private key"
+    if kind == "kubernetes.io/service-account-token": return "ServiceAccount token"
+    if kind == "kubernetes.io/tls": return "TLS certificate and private key"
+    return f"{len(data)} key{'' if len(data) == 1 else 's'}: {', '.join(list(data)[:3])}" if data else "No data keys"
+
 @router.get("/resources/{context_name}/overview")
 async def get_overview(context_name: str):
     try:
@@ -107,10 +119,12 @@ async def get_overview(context_name: str):
         components = []
         try:
             cs = await v1.list_component_status()
-            components = [
-                {"name": c.metadata.name, "status": "Healthy" if any(cond.type == 'Healthy' and cond.status == 'True' for cond in c.conditions) else "Unhealthy"}
-                for c in cs.items
-            ]
+            components = []
+            for component in cs.items:
+                conditions = component.conditions or []
+                healthy = next((condition for condition in conditions if condition.type == 'Healthy' and condition.status == 'True'), None)
+                reason = '; '.join(filter(None, [getattr(condition, 'message', None) or getattr(condition, 'error', None) for condition in conditions if condition.status != 'True']))
+                components.append({"name": component.metadata.name, "status": "Healthy" if healthy else "Unhealthy", "reason": reason or "The API server did not report a healthy component condition."})
         except:
             # Fallback: check some pods in kube-system
             components = [{"name": "API Server", "status": "Healthy"}, {"name": "etcd", "status": "Healthy"}]
@@ -362,6 +376,7 @@ async def get_secrets(context_name: str, namespace: str = None):
                 "namespace": item.metadata.namespace,
                 "type": item.type,
                 "data_count": len(item.data) if item.data else 0,
+                "summary": secret_summary(item),
                 "tls_info": tls_info,
                 "creation_timestamp": item.metadata.creation_timestamp,
             })
@@ -899,6 +914,21 @@ async def get_cronjobs(context_name: str, namespace: str = None):
         else:
             items = await batch.list_cron_job_for_all_namespaces()
         return {"items": [{"name": i.metadata.name, "namespace": i.metadata.namespace, "schedule": i.spec.schedule, "last_schedule": i.status.last_schedule_time, "active": len(i.status.active) if i.status.active else 0, "creation_timestamp": i.metadata.creation_timestamp} for i in items.items]}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.post("/resources/{context_name}/cronjobs/{namespace}/{name}/run")
+async def run_cronjob(context_name: str, namespace: str, name: str):
+    try:
+        client = await cluster_manager.get_client(context_name)
+        batch = BatchV1Api(client)
+        cronjob = await batch.read_namespaced_cron_job(name, namespace)
+        template = client.sanitize_for_serialization(cronjob.spec.job_template)
+        template.setdefault("metadata", {}).setdefault("labels", {})["cronjob.kubernetes.io/instantiate"] = "manual"
+        job_name = f"{name[:45]}-manual-{int(time.time())}"
+        job = {"apiVersion": "batch/v1", "kind": "Job", "metadata": {"name": job_name, "namespace": namespace, "ownerReferences": []}, "spec": template.get("spec", {})}
+        created = await batch.create_namespaced_job(namespace, job)
+        return {"status": "ok", "job": created.metadata.name}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

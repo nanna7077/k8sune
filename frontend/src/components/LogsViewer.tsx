@@ -7,6 +7,7 @@ import {
 } from "@fluentui/react-components";
 import { ArrowDownload20Regular } from '@fluentui/react-icons';
 import { getBackendPort } from '../utils/api';
+import { apiFetch } from '../utils/api';
 import { useFeedbackDialog } from './FeedbackDialog';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeTextFile } from '@tauri-apps/plugin-fs';
@@ -80,6 +81,8 @@ export const LogsViewer = ({ context, namespace, pod }: { context: string, names
   const [logs, setLogs] = useState<string[]>([]);
   const [timeframe, setTimeframe] = useState('0');
   const [logSource, setLogSource] = useState<'current' | 'previous'>('current');
+  const [containers, setContainers] = useState<string[]>([]);
+  const [container, setContainer] = useState('');
   const logAreaRef = useRef<HTMLDivElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
 
@@ -93,6 +96,7 @@ export const LogsViewer = ({ context, namespace, pod }: { context: string, names
       params.set('since_seconds', seconds);
     }
     if (source === 'previous') params.set('previous', 'true');
+    if (container) params.set('container', container);
     const query = params.toString();
     const url = `http://127.0.0.1:${port}/api/logs/${context}/${namespace}/${pod}${query ? `?${query}` : ''}`;
     
@@ -108,11 +112,18 @@ export const LogsViewer = ({ context, namespace, pod }: { context: string, names
   };
 
   useEffect(() => {
+    apiFetch<any>(`/api/resources/${encodeURIComponent(context)}/pods/${encodeURIComponent(namespace)}/${encodeURIComponent(pod)}`).then(data => {
+      const names = (data.spec?.containers || []).map((item: any) => item.name);
+      setContainers(names); setContainer(current => current || names[0] || '');
+    }).catch(error => feedback.notice('Could not load Pod containers', String(error), 'warning'));
+  }, [context, namespace, pod]);
+
+  useEffect(() => {
     startStreaming(timeframe, logSource);
     return () => {
       if (eventSourceRef.current) eventSourceRef.current.close();
     };
-  }, [context, namespace, pod, timeframe, logSource]);
+  }, [context, namespace, pod, timeframe, logSource, container]);
 
   useEffect(() => {
     if (logAreaRef.current) {
@@ -145,6 +156,7 @@ export const LogsViewer = ({ context, namespace, pod }: { context: string, names
         </div>
         
         <div className={styles.controls}>
+          {containers.length > 1 && <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}><span style={{ fontSize: '0.75rem', opacity: 0.6 }}>Container:</span><Select size="small" value={container} onChange={event => setContainer(event.target.value)}>{containers.map(name => <option key={name} value={name}>{name}</option>)}</Select></div>}
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <span style={{ fontSize: '0.75rem', opacity: 0.6 }}>Source:</span>
             <Select size="small" value={logSource} onChange={(e) => setLogSource(e.target.value as 'current' | 'previous')}>

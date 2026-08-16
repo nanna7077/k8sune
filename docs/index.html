@@ -19,11 +19,22 @@
             <p class="install-label" id="install-label">Install with Homebrew</p>
             <div class="command"><span id="prompt">$</span><code id="install-command">brew install nanna7077/tap/k8sune</code><button id="copy-install" type="button" data-command="brew install nanna7077/tap/k8sune">Copy</button></div>
             <div class="links"><span id="install-platform">macOS · Homebrew</span><a href="https://github.com/nanna7077/k8sune/releases">GitHub Releases <b>↗</b></a><a href="https://github.com/nanna7077/k8sune">Source <b>↗</b></a></div>
+            <p class="gatekeeper-note">Downloaded a macOS release and Gatekeeper blocked it? Try opening it once, then use <strong>System Settings → Privacy &amp; Security → Open Anyway</strong>. Or run <code>xattr -rd com.apple.quarantine "/Applications/k8sune.app"</code>. <button class="text-link" id="why-gatekeeper" type="button">Know why</button></p>
           </div>
         </div>
         <figure class="mascot" aria-hidden="true"><img src="../sprites/k8sune-wave.png" alt="" /></figure>
       </section>
     </main>
+    <dialog class="gatekeeper-dialog" id="gatekeeper-dialog" aria-labelledby="gatekeeper-title">
+      <div class="dialog-inner">
+        <button class="dialog-close" id="close-gatekeeper" type="button" aria-label="Close">×</button>
+        <p class="eyebrow">MACOS SECURITY</p>
+        <h2 id="gatekeeper-title">Why does macOS ask?</h2>
+        <p>Files downloaded outside the App Store receive a quarantine attribute. Gatekeeper uses it to require an explicit choice before opening an app that has not been notarized with your Apple developer identity.</p>
+        <p><strong>Open Anyway</strong> preserves that decision in macOS. The <code>xattr</code> command removes the downloaded-file quarantine marker from that specific app bundle.</p>
+        <p>Only do either after verifying that you downloaded k8sune from its official GitHub release.</p>
+      </div>
+    </dialog>
     <script>
       const copy = document.getElementById('copy-install');
       const command = document.getElementById('install-command');
@@ -48,6 +59,10 @@
         try { await navigator.clipboard.writeText(copy.dataset.command); copy.textContent = 'Copied'; setTimeout(() => { copy.textContent = 'Copy'; }, 1600); }
         catch { copy.textContent = 'Select command'; }
       });
+      const gatekeeperDialog = document.getElementById('gatekeeper-dialog');
+      document.getElementById('why-gatekeeper')?.addEventListener('click', () => gatekeeperDialog?.showModal());
+      document.getElementById('close-gatekeeper')?.addEventListener('click', () => gatekeeperDialog?.close());
+      gatekeeperDialog?.addEventListener('click', (event) => { if (event.target === gatekeeperDialog) gatekeeperDialog.close(); });
     </script>
   </body>
 </html>

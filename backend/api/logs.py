@@ -13,6 +13,13 @@ async def stream_logs(request: Request, context_name: str, namespace: str, pod_n
 
     async def log_generator():
         try:
+            selected_container = container
+            if not selected_container:
+                pod = await v1.read_namespaced_pod(pod_name, namespace)
+                containers = [item.name for item in (pod.spec.containers or [])]
+                if not containers:
+                    raise RuntimeError("Pod has no containers")
+                selected_container = containers[0]
             # Previous container instances are completed and cannot be followed.
             params = {
                 "name": pod_name,
@@ -21,8 +28,7 @@ async def stream_logs(request: Request, context_name: str, namespace: str, pod_n
                 "previous": previous,
                 "_preload_content": False
             }
-            if container:
-                params["container"] = container
+            params["container"] = selected_container
             if since_seconds:
                 params["since_seconds"] = since_seconds
             

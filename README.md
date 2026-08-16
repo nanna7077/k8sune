@@ -32,6 +32,12 @@
 brew install nanna7077/tap/k8sune
 ```
 
+If macOS blocks a downloaded release because it is from an unidentified developer, first try opening the app, then choose **Open Anyway** in **System Settings → Privacy & Security**. Alternatively, remove the quarantine attribute from the installed app:
+
+```bash
+xattr -rd com.apple.quarantine "/Applications/k8sune.app"
+```
+
 ### Linux and Windows
 
 Download the appropriate published package from [GitHub Releases](https://github.com/nanna7077/k8sune/releases). Release builds include Linux bundle artifacts when published; Windows installers are not currently part of the release workflow.
