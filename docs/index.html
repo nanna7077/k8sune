@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="k8sune is a native desktop workspace for working directly with Kubernetes." />
+    <title>k8sune — Work the cluster</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">NATIVE DESKTOP KUBERNETES CLIENT</p>
+          <h1>Work the cluster.<br /><em>Not the tabs.</em></h1>
+          <p class="lede">k8sune keeps the Kubernetes objects, in-cluster diagnostics, and guarded actions in one desktop workspace. No fake simplification. No browser dashboard pretending to be an operator tool.</p>
+
+          <div class="install" id="install">
+            <p class="install-label" id="install-label">Install with Homebrew</p>
+            <div class="command"><span id="prompt">$</span><code id="install-command">brew install nanna7077/tap/k8sune</code><button id="copy-install" type="button" data-command="brew install nanna7077/tap/k8sune">Copy</button></div>
+            <div class="links"><span id="install-platform">macOS · Homebrew</span><a href="https://github.com/nanna7077/k8sune/releases">GitHub Releases <b>↗</b></a><a href="https://github.com/nanna7077/k8sune">Source <b>↗</b></a></div>
+          </div>
+        </div>
+        <figure class="mascot" aria-hidden="true"><img src="../sprites/k8sune-wave.png" alt="" /></figure>
+      </section>
+    </main>
+    <script>
+      const copy = document.getElementById('copy-install');
+      const command = document.getElementById('install-command');
+      const label = document.getElementById('install-label');
+      const platformLabel = document.getElementById('install-platform');
+      const prompt = document.getElementById('prompt');
+      const releases = 'https://github.com/nanna7077/k8sune/releases';
+      const platform = navigator.userAgentData?.platform || navigator.platform || navigator.userAgent;
+      const isWindows = /win/i.test(platform);
+      const isLinux = /linux/i.test(platform);
+      if (isWindows || isLinux) {
+        const operatingSystem = isLinux ? 'Linux' : 'Windows';
+        label.textContent = `${operatingSystem} release`;
+        platformLabel.textContent = `Download k8sune for ${operatingSystem} from GitHub Releases`;
+        prompt.textContent = '↗';
+        command.textContent = 'Download the latest release';
+        copy.textContent = 'Open releases';
+        copy.dataset.release = 'true';
+      }
+      copy?.addEventListener('click', async () => {
+        if (copy.dataset.release) { window.location.assign(releases); return; }
+        try { await navigator.clipboard.writeText(copy.dataset.command); copy.textContent = 'Copied'; setTimeout(() => { copy.textContent = 'Copy'; }, 1600); }
+        catch { copy.textContent = 'Select command'; }
+      });
+    </script>
+  </body>
+</html>

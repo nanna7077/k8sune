@@ -27,6 +27,24 @@ async def get_crds(context_name: str):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+@router.get("/crds/{context_name}/{plural}/schema")
+async def get_crd_schema(context_name: str, plural: str, version: str = None):
+    """Return the published OpenAPI v3 schema for a CRD version when present."""
+    try:
+        client = await cluster_manager.get_client(context_name)
+        crds = await ApiextensionsV1Api(client).list_custom_resource_definition()
+        crd = next((item for item in crds.items if item.spec.names.plural == plural), None)
+        if not crd:
+            raise HTTPException(status_code=404, detail="CRD not found")
+        selected = next((item for item in crd.spec.versions if item.name == (version or crd.spec.versions[0].name)), None)
+        schema = selected.schema.open_apiv3_schema if selected and selected.schema else None
+        serialized = client.sanitize_for_serialization(schema) if schema else None
+        return {"kind": crd.spec.names.kind, "version": selected.name if selected else version, "schema": serialized, "available": bool(serialized)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 @router.get("/custom_resources/{context_name}/{group}/{version}/{plural}")
 async def get_custom_resources(context_name: str, group: str, version: str, plural: str, namespace: str = None):
     try:

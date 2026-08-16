@@ -9,6 +9,7 @@ export const openSectionWindow = async (section: string, params: Record<string, 
     title: `k8sune - ${section} [${params.name || params.context}]`,
     width: section === 'logs' || section === 'yaml' ? 1000 : 1200,
     height: 800,
+    backgroundColor: '#0b0c10',
     decorations: false,
     resizable: true,
   });

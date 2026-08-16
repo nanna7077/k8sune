@@ -91,16 +91,24 @@ pub fn run() {
         );
       }
 
-      let current_exe = std::env::current_exe().unwrap_or_default();
-      let exe_dir = current_exe.parent().unwrap_or(&current_exe);
-      let backend_next_to_exe = exe_dir.join("backend");
+      // `cargo tauri dev` runs from target/debug, whereas production bundles
+      // backend resources beside the executable. Resolve each location explicitly.
+      #[cfg(debug_assertions)]
+      let backend_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../backend");
 
-      let backend_dir = if backend_next_to_exe.exists() {
-          backend_next_to_exe
-      } else {
-          app.path()
-              .resolve("backend", tauri::path::BaseDirectory::Resource)
-              .unwrap_or_default()
+      #[cfg(not(debug_assertions))]
+      let backend_dir = {
+          let current_exe = std::env::current_exe().unwrap_or_default();
+          let exe_dir = current_exe.parent().unwrap_or(&current_exe);
+          let backend_next_to_exe = exe_dir.join("backend");
+
+          if backend_next_to_exe.exists() {
+              backend_next_to_exe
+          } else {
+              app.path()
+                  .resolve("backend", tauri::path::BaseDirectory::Resource)
+                  .unwrap_or_default()
+          }
       };
       let project_root = backend_dir.parent().unwrap_or(&backend_dir).to_path_buf();
 

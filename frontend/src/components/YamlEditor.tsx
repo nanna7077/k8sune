@@ -8,6 +8,7 @@ import {
 } from "@fluentui/react-components";
 import { Save20Regular, ArrowSync20Regular, EyeOff20Regular, Eye20Regular } from '@fluentui/react-icons';
 import { apiFetch } from '../utils/api';
+import { useFeedbackDialog } from './FeedbackDialog';
 
 const useStyles = makeStyles({
   container: {
@@ -56,11 +57,13 @@ export const YamlEditor = ({ context, namespace, name, resourceType }: {
   resourceType: string 
 }) => {
   const styles = useStyles();
+  const feedback = useFeedbackDialog();
   const [yamlContent, setYamlContent] = useState<string>('');
   const [originalYaml, setOriginalYaml] = useState<string>('');
   const [showDiff, setShowDiff] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [schema, setSchema] = useState<any>(null);
 
   const loadYaml = async () => {
     setLoading(true);
@@ -69,7 +72,7 @@ export const YamlEditor = ({ context, namespace, name, resourceType }: {
       setYamlContent(data.yaml);
       setOriginalYaml(data.yaml);
     } catch (e) {
-      alert(`Error loading YAML: ${e}`);
+      feedback.notice('Could not load YAML', String(e), 'error');
     } finally {
       setLoading(false);
     }
@@ -85,9 +88,9 @@ export const YamlEditor = ({ context, namespace, name, resourceType }: {
       });
       setOriginalYaml(yamlContent);
       setShowDiff(false);
-      alert('Successfully applied YAML');
+      feedback.notice('Changes applied', 'The resource was updated successfully.', 'success');
     } catch (e) {
-      alert(`Error applying YAML: ${e}`);
+      feedback.notice('Could not apply YAML', String(e), 'error');
     } finally {
       setSaving(false);
     }
@@ -95,10 +98,17 @@ export const YamlEditor = ({ context, namespace, name, resourceType }: {
 
   useEffect(() => {
     loadYaml();
+    const customParts = resourceType.match(/^custom_(.+)_([^_]+)_([^_]+)$/);
+    if (!customParts) { setSchema(null); return; }
+    const [, , version, plural] = customParts;
+    apiFetch<any>(`/api/crds/${context}/${encodeURIComponent(plural)}/schema?version=${encodeURIComponent(version)}`)
+      .then(data => setSchema(data.available ? data.schema : null))
+      .catch(() => setSchema(null));
   }, [context, namespace, name, resourceType]);
 
   return (
     <div className={styles.container}>
+      {feedback.dialog}
       <div className={styles.header}>
         <div className={styles.titleGroup}>
           <div className={styles.title}>Edit: {name}</div>
@@ -119,6 +129,7 @@ export const YamlEditor = ({ context, namespace, name, resourceType }: {
           </Button>
         </div>
       </div>
+      {schema && <div style={{ marginBottom: '12px', padding: '10px 12px', borderRadius: '7px', background: 'rgba(111, 154, 255, 0.08)', fontSize: '0.78rem', display: 'flex', gap: '14px', flexWrap: 'wrap' }}><strong>OpenAPI schema available</strong><span>Required: {(schema.required || []).join(', ') || 'none declared'}</span><span>Fields: {Object.keys(schema.properties || {}).slice(0, 10).join(', ') || 'schema has no top-level fields'}</span></div>}
       
       {loading ? (
         <Spinner label="Loading resource YAML..." style={{ marginTop: '2rem' }} />

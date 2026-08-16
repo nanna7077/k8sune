@@ -7,17 +7,18 @@ import asyncio
 router = APIRouter()
 
 @router.get("/logs/{context_name}/{namespace}/{pod_name}")
-async def stream_logs(request: Request, context_name: str, namespace: str, pod_name: str, container: str = None, since_seconds: int = None):
+async def stream_logs(request: Request, context_name: str, namespace: str, pod_name: str, container: str = None, since_seconds: int = None, previous: bool = False):
     client = await cluster_manager.get_client(context_name)
     v1 = CoreV1Api(client)
 
     async def log_generator():
         try:
-            # We use follow=True to stream logs
+            # Previous container instances are completed and cannot be followed.
             params = {
                 "name": pod_name,
                 "namespace": namespace,
-                "follow": True,
+                "follow": not previous,
+                "previous": previous,
                 "_preload_content": False
             }
             if container:

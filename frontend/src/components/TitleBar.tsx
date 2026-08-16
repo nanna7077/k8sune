@@ -9,7 +9,8 @@ import {
 const useStyles = makeStyles({
   titlebar: {
     height: '32px',
-    backgroundColor: 'var(--colorNeutralBackground2)',
+    backgroundColor: 'rgba(13, 14, 19, 0.9)',
+    backdropFilter: 'blur(18px)',
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -19,7 +20,7 @@ const useStyles = makeStyles({
     left: 0,
     right: 0,
     zIndex: 1000,
-    ...shorthands.borderBottom('1px', 'solid', 'var(--colorNeutralStroke1)'),
+    ...shorthands.borderBottom('1px', 'solid', 'rgba(171, 183, 220, 0.1)'),
   },
   dragRegion: {
     flex: 1,
@@ -30,8 +31,9 @@ const useStyles = makeStyles({
     cursor: 'default',
   },
   title: {
-    fontSize: '12px',
-    fontWeight: '600',
+    fontSize: '11px',
+    fontWeight: '650',
+    letterSpacing: '0.04em',
     color: 'var(--colorNeutralForeground3)',
   },
   controls: {
@@ -51,7 +53,7 @@ const useStyles = makeStyles({
     color: 'var(--colorNeutralForeground1)',
     cursor: 'pointer',
     '&:hover': {
-      backgroundColor: 'var(--colorNeutralBackground3)',
+      backgroundColor: 'rgba(174, 189, 255, 0.1)',
     }
   },
   closeButton: {

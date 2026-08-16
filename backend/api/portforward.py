@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException
 import subprocess
 import socket
 import asyncio
+from datetime import datetime, timezone
 from typing import Optional, List
 from pydantic import BaseModel
 
@@ -24,6 +25,8 @@ class PortForwardSession(BaseModel):
     service_name: str
     service_port: int
     local_port: int
+    status: str
+    started_at: str
 
 def get_free_port() -> int:
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -71,7 +74,8 @@ async def start_port_forward(req: StartPortForwardRequest):
         active_portforwards[key] = {
             "proc": proc,
             "local_port": local_port,
-            "service_port": req.service_port
+            "service_port": req.service_port,
+            "started_at": datetime.now(timezone.utc).isoformat(),
         }
 
         return {
@@ -91,6 +95,21 @@ async def stop_port_forward_endpoint(context_name: str, namespace: str, service_
     if not success:
         raise HTTPException(status_code=404, detail="No active port forward session found for this service")
     return {"success": True}
+
+@router.post("/portforward/reconnect")
+async def reconnect_port_forward(req: StartPortForwardRequest):
+    await stop_port_forward(req.context_name, req.namespace, req.service_name)
+    return await start_port_forward(req)
+
+@router.post("/portforward/stop-all")
+async def stop_all_port_forwards(context_name: Optional[str] = None):
+    stopped = 0
+    for context, namespace, service in list(active_portforwards.keys()):
+        if context_name and context != context_name:
+            continue
+        if await stop_port_forward(context, namespace, service):
+            stopped += 1
+    return {"success": True, "stopped": stopped}
 
 async def stop_port_forward(context_name: str, namespace: str, service_name: str) -> bool:
     key = (context_name, namespace, service_name)
@@ -128,7 +147,9 @@ async def get_active_port_forwards(context_name: Optional[str] = None):
                 namespace=key[1],
                 service_name=key[2],
                 service_port=val["service_port"],
-                local_port=val["local_port"]
+                local_port=val["local_port"],
+                status="active",
+                started_at=val["started_at"],
             ))
     return sessions
 

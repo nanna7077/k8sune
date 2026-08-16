@@ -41,7 +41,8 @@ import {
   CardHeader,
   Dropdown,
   Option,
-  Textarea
+  Textarea,
+  Checkbox
 } from "@fluentui/react-components";
 import { 
   MoreHorizontal20Regular, 
@@ -64,8 +65,6 @@ import {
   ArrowSortDown20Regular,
   ArrowSortUp20Regular,
   ChevronLeft20Regular,
-  Warning20Regular,
-  CheckmarkCircle20Regular,
   ArrowUpload20Regular,
   Add20Regular,
   WindowConsole20Regular,
@@ -75,9 +74,12 @@ import { apiFetch, getBackendPort } from '../utils/api';
 import { openSectionWindow } from '../utils/windowManager';
 import { useStore } from '../store/useStore';
 import { Mascot } from './Mascot';
+import { ACCENT_OPTIONS } from '../themes/tokens';
 import { LogsViewer } from './LogsViewer';
 import { YamlEditor } from './YamlEditor';
 import { ShellTerminal } from './ShellTerminal';
+import { useFeedbackDialog } from './FeedbackDialog';
+import { EventTimeline } from './EventTimeline';
 import { open } from '@tauri-apps/plugin-dialog';
 import { readTextFile } from '@tauri-apps/plugin-fs';
 
@@ -87,17 +89,20 @@ const useStyles = makeStyles({
     height: '100%',
     width: '100%',
     backgroundColor: 'transparent',
+    backgroundImage: 'var(--app-gradient)',
+    backgroundAttachment: 'fixed',
     color: 'var(--colorNeutralForeground1)',
     overflow: 'hidden'
   },
   sidebar: {
-    width: '260px',
-    backgroundColor: 'var(--colorNeutralBackground2)',
-    ...shorthands.borderRight('1px', 'solid', 'var(--colorNeutralStroke1)'),
+    width: '248px',
+    backgroundColor: 'rgba(15, 17, 24, 0.86)',
+    backdropFilter: 'blur(20px)',
+    ...shorthands.borderRight('1px', 'solid', 'rgba(171, 183, 220, 0.12)'),
     display: 'flex',
     flexDirection: 'column',
-    ...shorthands.padding('1.5rem', '1rem'),
-    gap: '1.5rem',
+    ...shorthands.padding('1.25rem', '0.75rem'),
+    gap: '1.25rem',
     overflowY: 'auto'
   },
   mainContainer: {
@@ -112,11 +117,11 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     overflow: 'hidden',
-    backgroundColor: '#09090b',
+    backgroundColor: 'transparent',
   },
   drawer: {
-    backgroundColor: 'var(--colorNeutralBackground2)',
-    ...shorthands.borderTop('1px', 'solid', 'var(--colorNeutralStroke1)'),
+    backgroundColor: 'rgba(18, 20, 27, 0.95)',
+    ...shorthands.borderTop('1px', 'solid', 'rgba(171, 183, 220, 0.14)'),
     display: 'flex',
     flexDirection: 'column',
     zIndex: 10,
@@ -140,29 +145,32 @@ const useStyles = makeStyles({
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: 'var(--colorNeutralBackground3)',
-    ...shorthands.borderBottom('1px', 'solid', 'var(--colorNeutralStroke1)'),
+    backgroundColor: 'rgba(255,255,255,0.018)',
+    ...shorthands.borderBottom('1px', 'solid', 'rgba(171, 183, 220, 0.1)'),
   },
   header: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    ...shorthands.padding('1.5rem', '2rem'),
-    ...shorthands.borderBottom('1px', 'solid', 'var(--colorNeutralStroke1)'),
+    minHeight: '78px',
+    ...shorthands.padding('1.1rem', '1.75rem'),
+    ...shorthands.borderBottom('1px', 'solid', 'rgba(171, 183, 220, 0.1)'),
+    backgroundColor: 'rgba(11, 12, 16, 0.42)',
+    backdropFilter: 'blur(16px)',
   },
   content: {
     flex: 1,
     overflowY: 'auto',
-    ...shorthands.padding('2rem'),
+    ...shorthands.padding('1.75rem'),
     display: 'flex',
     flexDirection: 'column',
-    gap: '1.5rem',
-    backgroundColor: '#09090b',
+    gap: '1.25rem',
+    backgroundColor: 'transparent',
   },
   tableCard: {
-    backgroundColor: 'var(--colorNeutralBackground2)',
-    ...shorthands.border('1px', 'solid', 'var(--colorNeutralStroke1)'),
-    ...shorthands.borderRadius('8px'),
+    backgroundColor: 'rgba(20, 22, 30, 0.72)',
+    ...shorthands.border('1px', 'solid', 'rgba(171, 183, 220, 0.13)'),
+    ...shorthands.borderRadius('14px'),
     overflow: 'hidden'
   },
   tabList: {
@@ -172,10 +180,14 @@ const useStyles = makeStyles({
   },
   sidebarItem: {
     justifyContent: 'flex-start',
-    ...shorthands.padding('8px', '12px'),
+    ...shorthands.padding('8px', '10px'),
     fontSize: '0.85rem',
     width: '100%',
-    textAlign: 'left'
+    textAlign: 'left',
+    borderRadius: '8px',
+    color: 'var(--colorNeutralForeground2)',
+    transitionDuration: '160ms',
+    '&:hover': { backgroundColor: 'rgba(174, 189, 255, 0.08)', color: 'var(--colorNeutralForeground1)' }
   },
   sidebarSubItem: {
     justifyContent: 'flex-start',
@@ -183,20 +195,21 @@ const useStyles = makeStyles({
     fontSize: '0.8rem',
     width: '100%',
     textAlign: 'left',
-    opacity: 0.8
+    opacity: 0.8,
+    borderRadius: '8px'
   },
   contextDropdown: {
     width: '100%',
-    backgroundColor: 'var(--colorNeutralBackground3)',
-    ...shorthands.borderRadius('6px'),
-    ...shorthands.padding('8px', '12px'),
+    backgroundColor: 'rgba(174, 189, 255, 0.06)',
+    ...shorthands.borderRadius('10px'),
+    ...shorthands.padding('10px', '12px'),
     cursor: 'pointer',
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    ...shorthands.border('1px', 'solid', 'var(--colorNeutralStroke1)'),
+    ...shorthands.border('1px', 'solid', 'rgba(174, 189, 255, 0.16)'),
     '&:hover': {
-      backgroundColor: 'var(--colorNeutralBackground4)',
+      backgroundColor: 'rgba(174, 189, 255, 0.12)',
     }
   },
   closeTabButton: {
@@ -212,16 +225,18 @@ const useStyles = makeStyles({
   overviewGrid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
-    gap: '1.5rem',
+    gap: '1rem',
   },
   metricCard: {
-    backgroundColor: 'var(--colorNeutralBackground2)',
-    ...shorthands.border('1px', 'solid', 'var(--colorNeutralStroke1)'),
-    ...shorthands.borderRadius('8px'),
-    ...shorthands.padding('1.5rem'),
+    backgroundColor: 'rgba(20, 22, 30, 0.72)',
+    ...shorthands.border('1px', 'solid', 'rgba(171, 183, 220, 0.13)'),
+    ...shorthands.borderRadius('14px'),
+    ...shorthands.padding('1.25rem'),
     display: 'flex',
     flexDirection: 'column',
-    gap: '1rem'
+    gap: '1rem',
+    boxShadow: '0 16px 38px -28px rgba(0, 0, 0, 0.9)',
+    transitionDuration: '180ms'
   },
   infoItem: {
     display: 'flex',
@@ -268,11 +283,23 @@ const useStyles = makeStyles({
   },
   headerControls: {
     display: 'flex',
-    gap: '1rem',
+    gap: '0.65rem',
     alignItems: 'center'
   },
   namespaceDropdown: {
     minWidth: '180px',
+  },
+  accentOptions: {
+    display: 'flex',
+    gap: '8px',
+    flexWrap: 'wrap',
+  },
+  accentButton: {
+    minWidth: '38px',
+    width: '38px',
+    height: '38px',
+    ...shorthands.padding(0),
+    ...shorthands.borderRadius('50%'),
   }
 });
 
@@ -299,6 +326,7 @@ interface PanelState {
   namespace: string;
   name: string;
   container?: string;
+  resourceType?: string;
 }
 
 interface ResourceDetail {
@@ -310,6 +338,30 @@ interface ResourceDetail {
     pods?: any[];
 }
 
+const ConfigMapEditorDetail = ({ context, resource }: { context: string; resource: ResourceDetail }) => (
+  <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, gap: '1rem' }}>
+    <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)', flexShrink: 0 }}>
+      <CardHeader header={<Subtitle2>Metadata</Subtitle2>} />
+      <div style={{ padding: '0 1rem 1rem', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+        <strong style={{ marginRight: '4px' }}>{resource.metadata.name}</strong>
+        {resource.metadata.namespace && <Badge appearance="tint" color="brand">Namespace: {resource.metadata.namespace}</Badge>}
+        <Badge appearance="tint" color="subtle">Age: {new Date(resource.metadata.creation_timestamp).toLocaleString()}</Badge>
+        {Object.entries(resource.metadata.labels || {}).map(([key, value]) => (
+          <Badge key={key} appearance="outline">{key}: {String(value)}</Badge>
+        ))}
+      </div>
+    </Card>
+    <div style={{ flex: 1, minHeight: '420px', overflow: 'hidden' }}>
+      <YamlEditor
+        context={context}
+        namespace={resource.metadata.namespace || 'default'}
+        name={resource.metadata.name}
+        resourceType="configmaps"
+      />
+    </div>
+  </div>
+);
+
 const NATIVE_OTHERS = [
   { label: 'Services', plural: 'services', group: 'core', version: 'v1' },
   { label: 'Ingresses', plural: 'ingresses', group: 'networking.k8s.io', version: 'v1' },
@@ -317,13 +369,63 @@ const NATIVE_OTHERS = [
   { label: 'Jobs', plural: 'jobs', group: 'batch', version: 'v1' },
 ];
 
-export const Dashboard = ({ context: initialContext }: { context: string }) => {
+const CREATE_KIND_BY_VIEW: Record<string, string> = {
+  deployments: 'Deployment',
+  statefulsets: 'StatefulSet',
+  daemonsets: 'DaemonSet',
+  cronjobs: 'CronJob',
+  configmaps: 'ConfigMap',
+  secrets: 'Secret',
+  persistentvolumeclaims: 'PersistentVolumeClaim',
+};
+
+const yamlScalar = (value: unknown) => {
+  if (value === null) return 'null';
+  if (typeof value === 'boolean' || typeof value === 'number') return String(value);
+  const text = String(value);
+  return text === '' || /^(true|false|null|~|yes|no|on|off)$/i.test(text) || /[:#{}\[\],&*!|>'"%@`]|^[-?]|\n|^\s|\s$/.test(text)
+    ? JSON.stringify(text)
+    : text;
+};
+
+/** A small YAML emitter for builder manifests. Keeping it local avoids a runtime dependency for one dialog. */
+const toYaml = (value: unknown, indent = 0): string => {
+  const padding = ' '.repeat(indent);
+  if (Array.isArray(value)) {
+    return value.map(item => {
+      if (item && typeof item === 'object') {
+        const nested = toYaml(item, indent + 2);
+        const [first, ...rest] = nested.split('\n');
+        return `${padding}- ${first.trimStart()}${rest.length ? `\n${rest.join('\n')}` : ''}`;
+      }
+      return `${padding}- ${yamlScalar(item)}`;
+    }).join('\n');
+  }
+  if (value && typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>).map(([key, item]) => {
+      const renderedKey = /^[A-Za-z_][A-Za-z0-9_.-]*$/.test(key) ? key : JSON.stringify(key);
+      if (item && typeof item === 'object') return `${padding}${renderedKey}:\n${toYaml(item, indent + 2)}`;
+      return `${padding}${renderedKey}: ${yamlScalar(item)}`;
+    }).join('\n');
+  }
+  return `${padding}${yamlScalar(value)}`;
+};
+
+export const Dashboard = ({ context: initialContext, initialResource, initialView, initialNodeCommand }: {
+  context: string;
+  initialResource?: { type: string; name: string; namespace?: string };
+  initialView?: string;
+  initialNodeCommand?: boolean;
+}) => {
   const styles = useStyles();
+  const feedback = useFeedbackDialog();
   const { 
     contexts, 
     activeContext, 
     setContexts, 
-    setActiveContext
+    setActiveContext,
+    accent,
+    setAccent
   } = useStore();
 
   const [activeView, setActiveView] = useState('overview');
@@ -333,8 +435,45 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
   const [activePanelId, setActivePanelId] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isImportOpen, setIsImportOpen] = useState(false);
+  const [isContextManagerOpen, setIsContextManagerOpen] = useState(false);
+  const [contextDetails, setContextDetails] = useState<any[]>([]);
+  const [editingContext, setEditingContext] = useState<any | null>(null);
+  const [isApplyYamlOpen, setIsApplyYamlOpen] = useState(false);
+  const [isPortForwardManagerOpen, setIsPortForwardManagerOpen] = useState(false);
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [isNodeCommandOpen, setIsNodeCommandOpen] = useState(false);
+  const [nodeCommand, setNodeCommand] = useState('uname -a');
+  const [nodeCommandTimeout, setNodeCommandTimeout] = useState('45');
+  const [nodeCommandResult, setNodeCommandResult] = useState<any[]>([]);
+  const [isRunningNodeCommand, setIsRunningNodeCommand] = useState(false);
+  const [commandQuery, setCommandQuery] = useState('');
+  const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
   const [importTab, setImportTab] = useState('file');
   const [importYaml, setImportYaml] = useState('');
+  const [yamlToApply, setYamlToApply] = useState('');
+  const [createKind, setCreateKind] = useState('Deployment');
+  const [createName, setCreateName] = useState('');
+  const [createDescription, setCreateDescription] = useState('');
+  const [createBuilderTab, setCreateBuilderTab] = useState('General');
+  const [createImage, setCreateImage] = useState('nginx:latest');
+  const [createReplicas, setCreateReplicas] = useState('1');
+  const [createSchedule, setCreateSchedule] = useState('*/5 * * * *');
+  const [createDataKey, setCreateDataKey] = useState('key');
+  const [createDataValue, setCreateDataValue] = useState('value');
+  const [createSecretType, setCreateSecretType] = useState('Opaque');
+  const [createSecretSecondaryValue, setCreateSecretSecondaryValue] = useState('');
+  const [createSecretServiceAccount, setCreateSecretServiceAccount] = useState('');
+  const [createStorage, setCreateStorage] = useState('1Gi');
+  const [createNodeSelector, setCreateNodeSelector] = useState('');
+  const [createServiceAccount, setCreateServiceAccount] = useState('');
+  const [createCommand, setCreateCommand] = useState('');
+  const [createEnv, setCreateEnv] = useState('');
+  const [createCpuRequest, setCreateCpuRequest] = useState('');
+  const [createMemoryRequest, setCreateMemoryRequest] = useState('');
+  const [createCpuLimit, setCreateCpuLimit] = useState('');
+  const [createMemoryLimit, setCreateMemoryLimit] = useState('');
+  const [applyNamespace, setApplyNamespace] = useState('');
+  const [isApplyingYaml, setIsApplyingYaml] = useState(false);
   const [drawerHeight, setDrawerHeight] = useState(400);
   const isResizing = useRef(false);
   
@@ -346,12 +485,39 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
   const [selectedNamespaces, setSelectedNamespaces] = useState<string[]>(['All Namespaces']);
   const [clusterSettings, setClusterSettings] = useState<any>({ metrics_source: 'standard' });
   const [overview, setOverview] = useState<any>(null);
+  const [rbacData, setRbacData] = useState<any>(null);
+  const [networkData, setNetworkData] = useState<any>(null);
+  const [storageData, setStorageData] = useState<any>(null);
+  const [helmData, setHelmData] = useState<any>(null);
+  const [helmRelease, setHelmRelease] = useState<any>(null);
+  const [helmHistory, setHelmHistory] = useState<any[]>([]);
+  const [helmValuesDiff, setHelmValuesDiff] = useState('');
+  const [storageSection, setStorageSection] = useState<'pvcs' | 'pvs' | 'classes' | 'attachments' | 'snapshots'>('pvcs');
+  const [networkSection, setNetworkSection] = useState<'services' | 'ingresses' | 'policies' | 'endpoints' | 'diagnostics'>('services');
+  const [dnsHost, setDnsHost] = useState('kubernetes.default.svc');
+  const [dnsResult, setDnsResult] = useState<any>(null);
+  const [connectionHost, setConnectionHost] = useState('');
+  const [connectionPort, setConnectionPort] = useState('80');
+  const [networkProbeNode, setNetworkProbeNode] = useState('');
+  const [connectionResult, setConnectionResult] = useState<any>(null);
+  const [isRunningDnsCheck, setIsRunningDnsCheck] = useState(false);
+  const [isRunningConnectionCheck, setIsRunningConnectionCheck] = useState(false);
+  const [rbacServiceAccountAccess, setRbacServiceAccountAccess] = useState<any | null>(null);
+  const [rbacBindingEditor, setRbacBindingEditor] = useState<any | null>(null);
+  const [rbacSubjectDraft, setRbacSubjectDraft] = useState({ kind: 'ServiceAccount', name: '', namespace: '' });
   const [selectedResource, setSelectedResource] = useState<{ type: string, name: string, namespace?: string } | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{ namespace?: string; name: string; type: string } | null>(null);
+  const [deleteConfirmationText, setDeleteConfirmationText] = useState('');
+  const [deleteDryRunResult, setDeleteDryRunResult] = useState<string | null>(null);
+  const [isCheckingDelete, setIsCheckingDelete] = useState(false);
   const [resourceDetail, setResourceDetail] = useState<ResourceDetail | null>(null);
   const [detailTab, setDetailTab] = useState('overview');
   const [detailPods, setDetailPods] = useState<ResourceItem[]>([]);
   const [detailEvents, setDetailEvents] = useState<any[]>([]);
+  const [detailEventsWarnings, setDetailEventsWarnings] = useState<string[]>([]);
   const [activePortForwards, setActivePortForwards] = useState<any[]>([]);
+  const [resourceContextMenu, setResourceContextMenu] = useState<{ resource: ResourceItem; x: number; y: number } | null>(null);
+  const [sidebarContextMenu, setSidebarContextMenu] = useState<{ x: number; y: number; view?: string; contextMenu?: boolean } | null>(null);
   
   const eventSourceRef = useRef<EventSource | null>(null);
   const [isReachable, setIsReachable] = useState<boolean>(true);
@@ -364,14 +530,114 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
 
   const context = activeContext || initialContext;
 
+  const runDnsCheck = async () => {
+    if (!dnsHost.trim()) return;
+    setIsRunningDnsCheck(true);
+    try {
+      setDnsResult(await apiFetch<any>(`/api/network/${encodeURIComponent(context || '')}/dns`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ host: dnsHost.trim(), source_node: networkProbeNode || undefined }) }));
+    } catch (error: any) {
+      setDnsResult({ error: error.message || String(error) });
+    } finally { setIsRunningDnsCheck(false); }
+  };
+
+  const runConnectionTest = async () => {
+    if (!connectionHost.trim() || !connectionPort) return;
+    setIsRunningConnectionCheck(true);
+    try {
+      setConnectionResult(await apiFetch<any>(`/api/network/${encodeURIComponent(context || '')}/connection-test`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ host: connectionHost.trim(), port: Number(connectionPort), timeout_seconds: 5, source_node: networkProbeNode || undefined }) }));
+    } catch (error: any) {
+      setConnectionResult({ reachable: false, error: error.message || String(error) });
+    } finally { setIsRunningConnectionCheck(false); }
+  };
+
+  const openHelmRelease = async (release: any) => {
+    try {
+      setHelmRelease(release);
+      const history = await apiFetch<any>(`/api/helm/${context}/releases/${encodeURIComponent(release.namespace)}/${encodeURIComponent(release.name)}/history`);
+      setHelmHistory(history.history || []);
+      const revisions = history.history || [];
+      if (revisions.length > 1) {
+        const diff = await apiFetch<any>(`/api/helm/${context}/releases/${encodeURIComponent(release.namespace)}/${encodeURIComponent(release.name)}/values-diff?from_revision=${revisions[revisions.length - 2].revision}&to_revision=${revisions[revisions.length - 1].revision}`);
+        setHelmValuesDiff(diff.diff || 'No values changes.');
+      } else setHelmValuesDiff('No prior revision to compare.');
+    } catch (error: any) { feedback.notice('Could not load Helm release', error.message || String(error), 'error'); }
+  };
+
+  useEffect(() => { if (initialNodeCommand) setIsNodeCommandOpen(true); }, [initialNodeCommand]);
+
   const fetchContexts = async () => {
     try {
-      const data = await apiFetch<{ contexts: string[], active_context: string }>('/api/contexts');
+      const data = await apiFetch<{ contexts: string[], active_context: string, details?: any[] }>('/api/contexts');
       setContexts(data.contexts);
+      setContextDetails(data.details || []);
       if (!activeContext) setActiveContext(data.active_context);
     } catch (e) {
       console.error(e);
     }
+  };
+
+  const saveContextDetails = async () => {
+    if (!editingContext) return;
+    try {
+      await apiFetch(`/api/contexts/${encodeURIComponent(editingContext.name)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ namespace: editingContext.namespace, server: editingContext.server }) });
+      setEditingContext(null);
+      await fetchContexts();
+      feedback.notice('Context updated', `${editingContext.name} was updated.`, 'success');
+    } catch (error) { feedback.notice('Could not update context', String(error), 'error'); }
+  };
+
+  const removeContext = async (item: any) => {
+    if (!await feedback.confirm('Remove context?', `Remove “${item.name}” from your kubeconfig? Shared credentials and cluster entries are kept.`, { confirmLabel: 'Remove', destructive: true })) return;
+    try {
+      await apiFetch(`/api/contexts/${encodeURIComponent(item.name)}`, { method: 'DELETE' });
+      if (activeContext === item.name) setActiveContext(null);
+      await fetchContexts();
+    } catch (error) { feedback.notice('Could not remove context', String(error), 'error'); }
+  };
+
+  const toggleFavoriteContext = async (item: any) => {
+    await apiFetch(`/api/contexts/settings/${encodeURIComponent(item.name)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings: { favorite: !item.favorite } }) });
+    await fetchContexts();
+  };
+
+  const refreshRbac = async () => {
+    if (!context) return;
+    const namespace = selectedNamespaces.includes('All Namespaces') ? 'default' : selectedNamespaces[0] || 'default';
+    setRbacData(await apiFetch<any>(`/api/rbac/${context}?namespace=${encodeURIComponent(namespace)}`));
+  };
+
+  const createRbacServiceAccount = async () => {
+    const name = await feedback.prompt('Create ServiceAccount', 'Enter a ServiceAccount name.');
+    if (!name?.trim()) return;
+    const namespace = selectedNamespaces.includes('All Namespaces') ? 'default' : selectedNamespaces[0] || 'default';
+    try {
+      await apiFetch(`/api/rbac/${context}/serviceaccounts`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name.trim(), namespace }) });
+      await refreshRbac();
+      feedback.notice('ServiceAccount created', `${namespace}/${name.trim()} is ready.`, 'success');
+    } catch (error) { feedback.notice('Could not create ServiceAccount', String(error), 'error'); }
+  };
+
+  const deleteRbacBinding = async (item: any, cluster: boolean) => {
+    if (!await feedback.confirm('Remove role binding?', `Remove “${item.name}”? This immediately revokes the permissions granted by this binding.`, { confirmLabel: 'Remove binding', destructive: true })) return;
+    try {
+      await apiFetch(`/api/rbac/${context}/bindings/${cluster ? 'cluster' : 'namespaced'}/${encodeURIComponent(item.namespace || '_')}/${encodeURIComponent(item.name)}`, { method: 'DELETE' });
+      await refreshRbac();
+    } catch (error) { feedback.notice('Could not remove binding', String(error), 'error'); }
+  };
+
+  const showServiceAccountAccess = async (item: any) => {
+    try { setRbacServiceAccountAccess(await apiFetch<any>(`/api/rbac/${context}/serviceaccounts/${encodeURIComponent(item.namespace)}/${encodeURIComponent(item.name)}`)); }
+    catch (error) { feedback.notice('Could not load ServiceAccount access', String(error), 'error'); }
+  };
+
+  const saveRbacBinding = async () => {
+    const item = rbacBindingEditor;
+    if (!item) return;
+    const subjects = item.subjects || [];
+    try {
+      await apiFetch(`/api/rbac/${context}/bindings/${item.cluster ? 'cluster' : 'namespaced'}/${encodeURIComponent(item.namespace || '_')}/${encodeURIComponent(item.name)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ role_kind: item.roleKind, role_name: item.roleName, subjects }) });
+      setRbacBindingEditor(null); await refreshRbac(); feedback.notice('Binding updated', `${item.name} was updated.`, 'success');
+    } catch (error) { feedback.notice('Could not update binding', String(error), 'error'); }
   };
 
   const fetchNamespaces = async () => {
@@ -404,7 +670,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
           });
           setClusterSettings(newSettings);
       } catch (e) {
-          alert(`Failed to save settings: ${e}`);
+          feedback.notice('Could not save settings', String(e), 'error');
       }
   }
 
@@ -419,35 +685,75 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
   };
 
   const handleDeleteResource = async (ns: string | undefined, name: string, type: string) => {
-    if (!window.confirm(`Are you sure you want to delete ${type} "${name}"?`)) return;
+    setPendingDelete({ namespace: ns, name, type });
+    setDeleteConfirmationText('');
+    setDeleteDryRunResult(null);
+  };
+
+  const executeDeleteResource = async (dryRun = false) => {
+    if (!pendingDelete) return;
+    const { namespace: ns, name, type } = pendingDelete;
     try {
       const resourceNamespace = ns || 'none';
-      const targetType = type === 'other_replicasets' ? 'replicasets' : type === 'other_jobs' ? 'jobs' : type === 'other_services' ? 'services' : type === 'other_ingresses' ? 'ingresses' : type;
-      await apiFetch(`/api/resources/${context}/${targetType}/${resourceNamespace}/${name}`, {
+      const targetType = type === 'other_replicasets' ? 'replicasets' : type === 'other_jobs' ? 'jobs' : type === 'other_services' ? 'services' : type === 'other_ingresses' ? 'ingresses' : type === 'persistentvolumeclaims' ? 'pvcs' : type;
+      await apiFetch(`/api/resources/${context}/${targetType}/${resourceNamespace}/${name}${dryRun ? '?dry_run=true' : ''}`, {
           method: 'DELETE'
       });
-      alert(`Successfully deleted ${name}`);
+      if (dryRun) {
+        setDeleteDryRunResult('Server-side dry-run passed. Kubernetes accepted this delete request; no resource was removed.');
+        return;
+      }
+      feedback.notice('Resource deleted', `Deleted ${name}.`, 'success');
+      setPendingDelete(null);
       loadData();
       if (selectedResource && selectedResource.name === name && selectedResource.namespace === ns) {
           setSelectedResource(null);
           setResourceDetail(null);
       }
     } catch (e: any) {
-      alert(`Failed to delete resource: ${e.message || e}`);
+      if (dryRun) setDeleteDryRunResult(`Dry-run failed: ${e.message || String(e)}`);
+      else feedback.notice('Could not delete resource', e.message || String(e), 'error');
     }
   };
 
+  const runDeleteDryRun = async () => {
+    setIsCheckingDelete(true);
+    await executeDeleteResource(true);
+    setIsCheckingDelete(false);
+  };
+
   const handleRedeploy = async (ns: string | undefined, name: string) => {
-    if (!window.confirm(`Are you sure you want to trigger a redeploy (rollout restart) for "${name}"?`)) return;
+    if (!await feedback.confirm('Restart deployment?', `Trigger a rollout restart for “${name}”?`, { confirmLabel: 'Restart' })) return;
     try {
       await apiFetch(`/api/resources/${context}/deployments/${ns || 'default'}/${name}/redeploy`, {
           method: 'POST'
       });
-      alert(`Redeployment triggered successfully for ${name}`);
+      feedback.notice('Redeployment started', `A rollout restart was triggered for ${name}.`, 'success');
       loadData();
     } catch (e: any) {
-      alert(`Failed to trigger redeploy: ${e.message || e}`);
+      feedback.notice('Could not restart deployment', e.message || String(e), 'error');
     }
+  };
+
+  const handleScaleDeployment = async (deployment: ResourceItem, replicas: number) => {
+    if (replicas < 0) return;
+    try {
+      await apiFetch(`/api/resources/${context}/deployments/${deployment.namespace || 'default'}/${deployment.name}/scale?replicas=${replicas}`, { method: 'POST' });
+      setResources(current => current.map(item => item.name === deployment.name && item.namespace === deployment.namespace ? { ...item, replicas } : item));
+      feedback.notice('Deployment scaled', `${deployment.name} is now targeting ${replicas} replica${replicas === 1 ? '' : 's'}.`, 'success');
+    } catch (error) {
+      feedback.notice('Could not scale deployment', String(error), 'error');
+    }
+  };
+
+  const runNodeCommand = async () => {
+    if (!nodeCommand.trim()) return;
+    setIsRunningNodeCommand(true); setNodeCommandResult([]);
+    try {
+      const result = await apiFetch<{ results: any[] }>(`/api/commands/${context}/nodes`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ command: nodeCommand, namespace: selectedNamespaces.includes('All Namespaces') ? 'default' : selectedNamespaces[0] || 'default', timeout_seconds: Math.min(300, Math.max(5, Number(nodeCommandTimeout) || 45)) }) });
+      setNodeCommandResult(result.results);
+    } catch (error) { feedback.notice('Node command failed', String(error), 'error'); }
+    finally { setIsRunningNodeCommand(false); }
   };
 
   const handleStartPortForward = async (ns: string | undefined, name: string, defaultPortStr: string | undefined) => {
@@ -458,14 +764,12 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
       if (!isNaN(parsed)) servicePort = parsed;
     }
 
-    const portPrompt = window.prompt(
-      `Enter local port to forward to service port ${servicePort} (leave empty to automatically allocate a free port):`
-    );
+    const portPrompt = await feedback.prompt('Start port forward', `Enter a local port for service port ${servicePort}. Leave this empty to allocate a free port.`);
     if (portPrompt === null) return; // User cancelled
 
     const localPort = portPrompt.trim() ? parseInt(portPrompt.trim()) : null;
     if (localPort !== null && isNaN(localPort)) {
-        alert("Invalid local port number");
+        feedback.notice('Invalid port', 'Enter a valid numeric local port.', 'warning');
         return;
     }
 
@@ -482,11 +786,11 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
         })
       });
       if (res.success) {
-        alert(`Successfully started port forward on local port: ${res.local_port}`);
+        feedback.notice('Port forward started', `Local port ${res.local_port} now forwards to ${name}.`, 'success');
         loadActivePortForwards();
       }
     } catch (e: any) {
-      alert(`Failed to start port forward: ${e.message || e}`);
+      feedback.notice('Could not start port forward', e.message || String(e), 'error');
     }
   };
 
@@ -495,10 +799,51 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
       await apiFetch(`/api/portforward/stop?context_name=${context}&namespace=${ns || 'default'}&service_name=${name}`, {
         method: 'POST'
       });
-      alert(`Stopped port forward for ${name}`);
+      feedback.notice('Port forward stopped', `Stopped forwarding for ${name}.`, 'success');
       loadActivePortForwards();
     } catch (e: any) {
-      alert(`Failed to stop port forward: ${e.message || e}`);
+      feedback.notice('Could not stop port forward', e.message || String(e), 'error');
+    }
+  };
+
+  const handleReconnectPortForward = async (session: any) => {
+    try {
+      const result: any = await apiFetch('/api/portforward/reconnect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          context_name: session.context_name,
+          namespace: session.namespace,
+          service_name: session.service_name,
+          service_port: session.service_port,
+          local_port: session.local_port,
+        }),
+      });
+      await loadActivePortForwards();
+      feedback.notice('Port forward reconnected', `${session.service_name} is listening on localhost:${result.local_port}.`, 'success');
+    } catch (e: any) {
+      feedback.notice('Could not reconnect port forward', e.message || String(e), 'error');
+    }
+  };
+
+  const handleStopAllPortForwards = async () => {
+    if (!await feedback.confirm('Stop all port forwards?', `Stop all active port forwards for ${context}?`, { confirmLabel: 'Stop all', destructive: true })) return;
+    try {
+      const result = await apiFetch<{ stopped: number }>(`/api/portforward/stop-all?context_name=${encodeURIComponent(context)}`, { method: 'POST' });
+      await loadActivePortForwards();
+      feedback.notice('Port forwards stopped', `Stopped ${result.stopped} active session${result.stopped === 1 ? '' : 's'}.`, 'success');
+    } catch (e: any) {
+      feedback.notice('Could not stop port forwards', e.message || String(e), 'error');
+    }
+  };
+
+  const handleCopyPortForwardUrl = async (session: any) => {
+    const url = `http://127.0.0.1:${session.local_port}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      feedback.notice('URL copied', url, 'success');
+    } catch (e) {
+      feedback.notice('Could not copy URL', url, 'warning');
     }
   };
 
@@ -510,6 +855,15 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
       if (activeView === 'overview') {
         const data = await apiFetch<any>(`/api/resources/${context}/overview`);
         setOverview(data);
+      } else if (activeView === 'rbac') {
+        const namespace = selectedNamespaces.includes('All Namespaces') ? 'default' : selectedNamespaces[0] || 'default';
+        setRbacData(await apiFetch<any>(`/api/rbac/${context}?namespace=${encodeURIComponent(namespace)}`));
+      } else if (activeView === 'network') {
+        setNetworkData(await apiFetch<any>(`/api/network/${context}`));
+      } else if (activeView === 'persistentvolumes') {
+        setStorageData(await apiFetch<any>(`/api/storage/${context}`));
+      } else if (activeView === 'helm') {
+        setHelmData(await apiFetch<any>(`/api/helm/${context}/releases`));
       } else if (activeView === 'crds_list') {
          const data = await apiFetch<{ items: CRD[] }>(`/api/crds/${context}`);
          setCrds(data.items);
@@ -579,6 +933,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
       setResourceDetail(null);
       setDetailPods([]);
       setDetailEvents([]);
+      setDetailEventsWarnings([]);
       try {
           const type = selectedResource.type;
           const name = selectedResource.name;
@@ -592,6 +947,10 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
           else if (type === 'daemonsets') endpoint = `/api/resources/${context}/daemonsets/${ns}/${name}`;
           else if (type === 'cronjobs') endpoint = `/api/resources/${context}/cronjobs/${ns}/${name}`;
           else if (type === 'namespaces') endpoint = `/api/resources/${context}/namespaces/${name}`;
+          else if (type === 'configmaps') endpoint = `/api/resources/${context}/configmaps/${ns}/${name}`;
+          else if (type === 'secrets') endpoint = `/api/resources/${context}/secrets/${ns}/${name}`;
+          else if (type === 'persistentvolumes') endpoint = `/api/resources/${context}/persistentvolumes/${name}`;
+          else if (type === 'persistentvolumeclaims') endpoint = `/api/resources/${context}/persistentvolumeclaims/${ns}/${name}`;
           else if (type === 'services' || type === 'other_services') endpoint = `/api/resources/${context}/services/${ns}/${name}`;
           else if (type === 'ingresses' || type === 'other_ingresses') endpoint = `/api/resources/${context}/ingresses/${ns}/${name}`;
           else if (type === 'replicasets' || type === 'other_replicasets') endpoint = `/api/resources/${context}/replicasets/${ns}/${name}`;
@@ -634,11 +993,16 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
           }
 
           try {
-              const eventsData = await apiFetch<{ items: any[] }>(`/api/resources/${context}/events/${ns}/${name}`);
+              const eventsPath = type === 'namespaces'
+                ? `/api/resources/${context}/events/namespace/${name}/all`
+                : `/api/resources/${context}/events/${ns}/${name}`;
+              const eventsData = await apiFetch<{ items: any[], warnings?: string[] }>(eventsPath);
               setDetailEvents(eventsData.items || []);
+              setDetailEventsWarnings(eventsData.warnings || []);
           } catch (err) {
               console.error("Failed to load resource events", err);
               setDetailEvents([]);
+              setDetailEventsWarnings([err instanceof Error ? err.message : String(err)]);
           }
       } catch (e) {
           console.error(e);
@@ -647,24 +1011,97 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
       }
   }
 
+  const handleApplyYaml = async () => {
+      if (!context || !yamlToApply.trim()) return;
+      setIsApplyingYaml(true);
+      try {
+          const result = await apiFetch<{ created: number }>(`/api/yaml/${context}/apply`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ yaml_content: yamlToApply, namespace: applyNamespace }),
+          });
+          setIsApplyYamlOpen(false);
+          setYamlToApply('');
+          setApplyNamespace('');
+          await loadData();
+          feedback.notice('Resources created', `Created ${result.created} resource${result.created === 1 ? '' : 's'}.`, 'success');
+      } catch (error) {
+          feedback.notice('Could not create resources', String(error), 'error');
+      } finally {
+          setIsApplyingYaml(false);
+      }
+  };
+
+  const generateResourceManifest = () => {
+    if (!createName.trim()) { feedback.notice('Resource name required', 'Enter a name before generating the manifest.', 'warning'); return; }
+    const metadata = {
+      name: createName.trim(),
+      ...(applyNamespace ? { namespace: applyNamespace } : {}),
+      ...((createDescription.trim() || (createKind === 'Secret' && createSecretType === 'kubernetes.io/service-account-token' && createSecretServiceAccount.trim())) ? {
+        annotations: {
+          ...(createDescription.trim() ? { 'k8sune.io/description': createDescription.trim() } : {}),
+          ...(createKind === 'Secret' && createSecretType === 'kubernetes.io/service-account-token' && createSecretServiceAccount.trim() ? { 'kubernetes.io/service-account.name': createSecretServiceAccount.trim() } : {}),
+        },
+      } : {}),
+    };
+    const nodeSelector = Object.fromEntries(createNodeSelector.split(',').map(entry => entry.trim()).filter(Boolean).map(entry => {
+      const separator = entry.indexOf('=');
+      return separator === -1 ? [entry, 'true'] : [entry.slice(0, separator).trim(), entry.slice(separator + 1).trim()];
+    }));
+    const environment = createEnv.split(',').map(entry => entry.trim()).filter(Boolean).map(entry => {
+      const separator = entry.indexOf('=');
+      return { name: separator === -1 ? entry : entry.slice(0, separator).trim(), value: separator === -1 ? '' : entry.slice(separator + 1) };
+    });
+    const resourceRequests = Object.fromEntries([['cpu', createCpuRequest], ['memory', createMemoryRequest]].filter(([, value]) => Boolean(value)));
+    const resourceLimits = Object.fromEntries([['cpu', createCpuLimit], ['memory', createMemoryLimit]].filter(([, value]) => Boolean(value)));
+    const container = {
+      name: createName.trim(),
+      image: createImage || 'nginx:latest',
+      ...(createCommand.trim() ? { command: createCommand.trim().split(/\s+/) } : {}),
+      ...(environment.length ? { env: environment } : {}),
+      ...(Object.keys(resourceRequests).length || Object.keys(resourceLimits).length ? { resources: { ...(Object.keys(resourceRequests).length ? { requests: resourceRequests } : {}), ...(Object.keys(resourceLimits).length ? { limits: resourceLimits } : {}) } } : {}),
+    };
+    const podSpec = {
+      ...(createServiceAccount.trim() ? { serviceAccountName: createServiceAccount.trim() } : {}),
+      ...(Object.keys(nodeSelector).length ? { nodeSelector } : {}),
+      containers: [container],
+    };
+    const podTemplate = { metadata: { labels: { app: createName.trim() } }, spec: podSpec };
+    const workload = createKind === 'Deployment' ? { apiVersion: 'apps/v1', kind: createKind, metadata, spec: { replicas: Number(createReplicas) || 1, selector: { matchLabels: { app: createName.trim() } }, template: podTemplate } }
+      : createKind === 'StatefulSet' ? { apiVersion: 'apps/v1', kind: createKind, metadata, spec: { serviceName: createName.trim(), replicas: Number(createReplicas) || 1, selector: { matchLabels: { app: createName.trim() } }, template: podTemplate } }
+      : createKind === 'DaemonSet' ? { apiVersion: 'apps/v1', kind: createKind, metadata, spec: { selector: { matchLabels: { app: createName.trim() } }, template: podTemplate } }
+      : createKind === 'CronJob' ? { apiVersion: 'batch/v1', kind: createKind, metadata, spec: { schedule: createSchedule, jobTemplate: { spec: { template: { metadata: podTemplate.metadata, spec: { ...podSpec, restartPolicy: 'OnFailure' } } } } } }
+      : createKind === 'ConfigMap' ? { apiVersion: 'v1', kind: createKind, metadata, data: { [createDataKey || 'key']: createDataValue } }
+      : createKind === 'Secret' ? (() => {
+        const type = createSecretType;
+        const stringData = type === 'kubernetes.io/tls' ? { 'tls.crt': createDataValue, 'tls.key': createSecretSecondaryValue }
+          : type === 'kubernetes.io/dockerconfigjson' ? { '.dockerconfigjson': createDataValue }
+          : type === 'kubernetes.io/basic-auth' ? { username: createDataValue, password: createSecretSecondaryValue }
+          : type === 'kubernetes.io/ssh-auth' ? { 'ssh-privatekey': createDataValue }
+          : type === 'kubernetes.io/service-account-token' ? undefined
+          : { [createDataKey || 'key']: createDataValue };
+        return { apiVersion: 'v1', kind: createKind, metadata, type, ...(stringData ? { stringData } : {}) };
+      })()
+      : { apiVersion: 'v1', kind: 'PersistentVolumeClaim', metadata, spec: { accessModes: ['ReadWriteOnce'], resources: { requests: { storage: createStorage || '1Gi' } } } };
+    setYamlToApply(`${toYaml(workload)}\n`);
+  };
+
   const handleImport = async () => {
       let content = importYaml;
       if (importTab === 'file') {
           try {
-              const selected = await open({
-                  filters: [{ name: 'Kubeconfig', extensions: ['yaml', 'yml', 'conf', 'config'] }]
-              });
+              const selected = await open();
               if (selected && !Array.isArray(selected)) {
                   content = await readTextFile(selected);
               } else return;
           } catch (e) {
-              alert(`Error reading file: ${e}`);
+              feedback.notice('Could not read file', String(e), 'error');
               return;
           }
       }
 
       if (!content) {
-          alert('No kubeconfig content provided');
+          feedback.notice('No kubeconfig content', 'Choose a file or paste kubeconfig YAML before importing.', 'warning');
           return;
       }
 
@@ -678,9 +1115,9 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
           setIsImportOpen(false);
           setImportYaml('');
           await fetchContexts();
-          alert('Kubeconfig imported and merged successfully');
+          feedback.notice('Kubeconfig imported', 'The kubeconfig was merged successfully.', 'success');
       } catch (e) {
-          alert(`Import failed: ${e}`);
+          feedback.notice('Kubeconfig import failed', String(e), 'error');
       } finally {
           setLoading(false);
       }
@@ -729,12 +1166,39 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
     setActivePanelId(id);
   };
 
-  const handleOpenYaml = (namespace: string, name: string) => {
-    const id = `yaml-${namespace}-${name}`;
+  const handleOpenYaml = (namespace: string, name: string, resourceType: string) => {
+    const id = `yaml-${resourceType}-${namespace}-${name}`;
     if (!panels.find(p => p.id === id)) {
-      setPanels(prev => [...prev, { id, type: 'yaml', namespace, name }]);
+      setPanels(prev => [...prev, { id, type: 'yaml', namespace, name, resourceType }]);
     }
     setActivePanelId(id);
+  };
+
+  const handleOpenResourceWindow = (resource: ResourceItem) => {
+    if (!context) return;
+    openSectionWindow('resource', {
+      context,
+      name: resource.name,
+      namespace: resource.namespace || '',
+      resourceType: activeView,
+    });
+  };
+
+  const handleOpenViewWindow = (view: string) => {
+    if (!context) return;
+    openSectionWindow('view', { context, view });
+  };
+
+  const openSidebarContextMenu = (event: React.MouseEvent, view?: string) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setSidebarContextMenu({ x: event.clientX, y: event.clientY, view, contextMenu: !view });
+  };
+
+  const openCommandPalette = () => {
+    setCommandQuery('');
+    setSelectedCommandIndex(0);
+    setIsCommandPaletteOpen(true);
   };
 
   const handleOpenShell = (namespace: string, pod: string, container: string) => {
@@ -761,7 +1225,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
     if (panel.type === 'logs') {
       openSectionWindow('logs', { context, namespace: panel.namespace, pod: panel.name });
     } else if (panel.type === 'yaml') {
-      openSectionWindow('yaml', { context, namespace: panel.namespace, name: panel.name, resourceType: activeView === 'pods' ? 'pods' : 'deployments' });
+      openSectionWindow('yaml', { context, namespace: panel.namespace, name: panel.name, resourceType: panel.resourceType || 'pods' });
     }
     handleClosePanel(panel.id);
   };
@@ -819,6 +1283,35 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
           loadResourceDetail();
       }
   }, [selectedResource]);
+
+  useEffect(() => {
+    if (!initialResource) return;
+    setActiveView(initialResource.type);
+    setSelectedResource(initialResource);
+  }, [initialResource?.type, initialResource?.name, initialResource?.namespace]);
+
+  useEffect(() => {
+    if (!initialView) return;
+    setActiveView(initialView);
+    setSelectedResource(null);
+  }, [initialView]);
+
+  useEffect(() => {
+    const closeMenu = () => { setResourceContextMenu(null); setSidebarContextMenu(null); };
+    window.addEventListener('click', closeMenu);
+    return () => window.removeEventListener('click', closeMenu);
+  }, []);
+
+  useEffect(() => {
+    const handleShortcut = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 'p') {
+        event.preventDefault();
+        openCommandPalette();
+      }
+    };
+    window.addEventListener('keydown', handleShortcut);
+    return () => window.removeEventListener('keydown', handleShortcut);
+  }, []);
 
   const sortedAndFilteredResources = useMemo(() => {
     const isAllNamespaces = selectedNamespaces.includes('All Namespaces');
@@ -925,6 +1418,13 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
         ];
       case 'deployments':
       case 'statefulsets':
+        return [
+          ...common,
+          sortableHeader('replicas', 'Replicas'),
+          sortableHeader('ready_replicas', 'Ready'),
+          sortableHeader('restart_count', 'Restarts'),
+          <TableHeaderCell key="actions" style={{ width: '40px' }}></TableHeaderCell>
+        ];
       case 'replicasets':
       case 'other_replicasets':
         return [
@@ -1037,9 +1537,40 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
     };
   };
 
+  const renderResourceActions = (r: ResourceItem) => (
+    <>
+      <MenuItem icon={<Document20Regular />} onClick={() => handleOpenResourceWindow(r)}>Open in New Window</MenuItem>
+      {(activeView === 'pods' || r.type === 'pods') && (
+        <>
+          <MenuItem icon={<TextBulletList20Regular />} onClick={() => handleOpenLogs(r.namespace!, r.name)}>View Logs</MenuItem>
+          <MenuItem icon={<WindowConsole20Regular />} onClick={() => handleOpenShell(r.namespace!, r.name, r.containers?.[0] || r.raw?.spec?.containers[0]?.name || 'default')}>Execute Shell</MenuItem>
+        </>
+      )}
+      {(activeView === 'deployments' || activeView === 'other_deployments') && <MenuItem icon={<ArrowClockwise20Regular />} onClick={() => handleRedeploy(r.namespace, r.name)}>Rollout Restart</MenuItem>}
+      {(activeView === 'services' || activeView === 'other_services' || r.cluster_ip !== undefined) && (
+        (() => activePortForwards.some(f => f.namespace === r.namespace && f.service_name === r.name)
+          ? <MenuItem icon={<Link20Regular />} onClick={() => handleStopPortForward(r.namespace, r.name)}>Stop Port Forward</MenuItem>
+          : <MenuItem icon={<Link20Regular />} onClick={() => handleStartPortForward(r.namespace, r.name, r.ports?.[0])}>Start Port Forward</MenuItem>)()
+      )}
+      {(['deployments', 'statefulsets', 'daemonsets', 'cronjobs', 'configmaps', 'secrets', 'persistentvolumeclaims'].includes(activeView) || activeView.startsWith('custom_')) && (
+        <MenuItem icon={<Document20Regular />} onClick={() => {
+          const crd = activeView.startsWith('custom_') ? crds.find(item => item.plural === activeView.replace('custom_', '')) : undefined;
+          handleOpenYaml(r.namespace || 'default', r.name, crd ? `custom_${crd.group}_${crd.version}_${crd.plural}` : activeView);
+        }}>Edit Resource</MenuItem>
+      )}
+      <MenuItem icon={<Delete20Regular />} style={{ color: 'var(--colorPaletteRedForeground1)' }} onClick={() => handleDeleteResource(r.namespace, r.name, activeView)}>Delete</MenuItem>
+    </>
+  );
+
+  const openResourceContextMenu = (event: React.MouseEvent, resource: ResourceItem) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setResourceContextMenu({ resource, x: event.clientX, y: event.clientY });
+  };
+
   const renderResourceRow = (r: ResourceItem) => {
     const commonCells = [
-      <TableCell key="name"><span className={styles.clickableName} onClick={() => setSelectedResource({ type: activeView, name: r.name, namespace: r.namespace })}>{r.name}</span></TableCell>,
+      <TableCell key="name"><span className={styles.clickableName} onClick={() => setSelectedResource({ type: activeView, name: r.name, namespace: r.namespace })} onContextMenu={event => openResourceContextMenu(event, r)}>{r.name}</span></TableCell>,
       <TableCell key="ns"><Badge appearance="tint" color="brand">{r.namespace || 'Cluster'}</Badge></TableCell>
     ];
 
@@ -1049,30 +1580,9 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                 <MenuTrigger disableButtonEnhancement>
                     <Button appearance="subtle" icon={<MoreHorizontal20Regular />} size="small" />
                 </MenuTrigger>
-                <MenuPopover>
+                    <MenuPopover>
                     <MenuList>
-                        {(activeView === 'pods' || r.type === 'pods') && (
-                            <>
-                            <MenuItem icon={<TextBulletList20Regular />} onClick={() => handleOpenLogs(r.namespace!, r.name)}>View Logs</MenuItem>
-                            <MenuItem icon={<WindowConsole20Regular />} onClick={() => handleOpenShell(r.namespace!, r.name, r.raw?.spec?.containers[0]?.name || 'default')}>Execute Shell</MenuItem>
-                            </>
-                        )}
-                        {(activeView === 'deployments' || activeView === 'other_deployments') && (
-                            <MenuItem icon={<ArrowClockwise20Regular />} onClick={() => handleRedeploy(r.namespace, r.name)}>Redeploy</MenuItem>
-                        )}
-                        {(activeView === 'services' || activeView === 'other_services' || r.cluster_ip !== undefined) && (
-                            (() => {
-                                const isForwarded = activePortForwards.some(f => f.namespace === r.namespace && f.service_name === r.name);
-                                if (isForwarded) {
-                                    return <MenuItem icon={<Link20Regular />} onClick={() => handleStopPortForward(r.namespace, r.name)}>Stop Port Forward</MenuItem>;
-                                } else {
-                                    const defaultPort = r.ports?.[0];
-                                    return <MenuItem icon={<Link20Regular />} onClick={() => handleStartPortForward(r.namespace, r.name, defaultPort)}>Start Port Forward</MenuItem>;
-                                }
-                            })()
-                        )}
-                        <MenuItem icon={<Document20Regular />} onClick={() => handleOpenYaml(r.namespace || 'default', r.name)}>Edit YAML</MenuItem>
-                        <MenuItem icon={<Delete20Regular />} style={{ color: 'var(--colorPaletteRedForeground1)' }} onClick={() => handleDeleteResource(r.namespace, r.name, activeView)}>Delete</MenuItem>
+                        {renderResourceActions(r)}
                     </MenuList>
                 </MenuPopover>
             </Menu>
@@ -1099,7 +1609,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
         case 'nodes':
             return (
                 <TableRow key={r.name}>
-                    <TableCell><span className={styles.clickableName} onClick={() => setSelectedResource({ type: 'nodes', name: r.name })}>{r.name}</span></TableCell>
+                    <TableCell><span className={styles.clickableName} onClick={() => setSelectedResource({ type: 'nodes', name: r.name })} onContextMenu={event => openResourceContextMenu(event, r)}>{r.name}</span></TableCell>
                     <TableCell><Badge color={r.status === 'Ready' ? 'success' : 'important'}>{r.status}</Badge></TableCell>
                     <TableCell><code style={{ fontSize: '0.75rem' }}>{r.internal_ip}</code></TableCell>
                     <TableCell><code style={{ fontSize: '0.75rem' }}>{r.external_ip}</code></TableCell>
@@ -1128,7 +1638,31 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                 </TableRow>
             );
         case 'deployments':
+            return (
+                <TableRow key={`${r.namespace}-${r.name}`}>
+                    {commonCells}
+                    <TableCell>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <Button size="small" appearance="subtle" aria-label={`Scale down ${r.name}`} onClick={() => handleScaleDeployment(r, Math.max(0, (r.replicas ?? 0) - 1))}>−</Button>
+                        <strong style={{ minWidth: '22px', textAlign: 'center' }}>{r.replicas ?? 0}</strong>
+                        <Button size="small" appearance="subtle" aria-label={`Scale up ${r.name}`} onClick={() => handleScaleDeployment(r, (r.replicas ?? 0) + 1)}>+</Button>
+                      </div>
+                    </TableCell>
+                    <TableCell><Badge color={(r.ready_replicas ?? 0) === (r.replicas ?? 0) ? 'success' : 'warning'}>{r.ready_replicas ?? 0}</Badge></TableCell>
+                    <TableCell><Badge appearance="tint" color={(r.restart_count ?? 0) > 0 ? 'warning' : 'success'}>{r.restart_count ?? 0}</Badge></TableCell>
+                    {actions}
+                </TableRow>
+            );
         case 'statefulsets':
+            return (
+                <TableRow key={`${r.namespace}-${r.name}`}>
+                    {commonCells}
+                    <TableCell>{r.replicas ?? 0}</TableCell>
+                    <TableCell><Badge color={(r.ready_replicas ?? 0) === (r.replicas ?? 0) ? 'success' : 'warning'}>{r.ready_replicas ?? 0}</Badge></TableCell>
+                    <TableCell><Badge appearance="tint" color={(r.restart_count ?? 0) > 0 ? 'warning' : 'success'}>{r.restart_count ?? 0}</Badge></TableCell>
+                    {actions}
+                </TableRow>
+            );
         case 'replicasets':
         case 'other_replicasets':
             return (
@@ -1178,7 +1712,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                     <TableRow key={`${r.namespace}-${r.name}`}>
                         <TableCell>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                                <span className={styles.clickableName} onClick={() => setSelectedResource({ type: 'services', name: r.name, namespace: r.namespace })}>{r.name}</span>
+                                <span className={styles.clickableName} onClick={() => setSelectedResource({ type: 'services', name: r.name, namespace: r.namespace })} onContextMenu={event => openResourceContextMenu(event, r)}>{r.name}</span>
                                 {forward && (
                                     <span style={{ fontSize: '0.75rem', color: 'var(--colorPaletteGreenForeground1)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                                         <Link20Regular style={{ width: '12px', height: '12px' }} />
@@ -1258,15 +1792,206 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
   };
 
   const activePanel = panels.find(p => p.id === activePanelId);
+  const commandItems = [
+    { group: 'Navigation', label: 'Cluster Overview', detail: 'Go to cluster overview', icon: <Apps20Regular />, run: () => { setActiveView('overview'); setSelectedResource(null); } },
+    { group: 'Navigation', label: 'Nodes', detail: 'Browse cluster nodes', icon: <Cube20Regular />, run: () => { setActiveView('nodes'); setSelectedResource(null); } },
+    { group: 'Navigation', label: 'Namespaces', detail: 'Browse namespaces', icon: <Link20Regular />, run: () => { setActiveView('namespaces'); setSelectedResource(null); } },
+    { group: 'Navigation', label: 'Pods', detail: 'Browse pods', icon: <Box20Regular />, run: () => { setActiveView('pods'); setSelectedResource(null); } },
+    { group: 'Navigation', label: 'Deployments', detail: 'Browse deployments', icon: <Layer20Regular />, run: () => { setActiveView('deployments'); setSelectedResource(null); } },
+    { group: 'Navigation', label: 'StatefulSets', detail: 'Browse stateful workloads', icon: <Layer20Regular />, run: () => { setActiveView('statefulsets'); setSelectedResource(null); } },
+    { group: 'Navigation', label: 'DaemonSets', detail: 'Browse node-level workloads', icon: <Layer20Regular />, run: () => { setActiveView('daemonsets'); setSelectedResource(null); } },
+    { group: 'Navigation', label: 'CronJobs', detail: 'Browse scheduled workloads', icon: <ArrowClockwise20Regular />, run: () => { setActiveView('cronjobs'); setSelectedResource(null); } },
+    { group: 'Navigation', label: 'ConfigMaps', detail: 'Browse ConfigMaps', icon: <Database20Regular />, run: () => { setActiveView('configmaps'); setSelectedResource(null); } },
+    { group: 'Navigation', label: 'Secrets', detail: 'Browse secrets', icon: <ShieldLock20Regular />, run: () => { setActiveView('secrets'); setSelectedResource(null); } },
+    { group: 'Navigation', label: 'Persistent Volumes & Claims', detail: 'Inspect storage and PVC health', icon: <Storage20Regular />, run: () => { setActiveView('persistentvolumes'); setSelectedResource(null); } },
+    { group: 'Navigation', label: 'RBAC Inspector', detail: 'Review effective access and bindings', icon: <ShieldLock20Regular />, run: () => { setActiveView('rbac'); setSelectedResource(null); } },
+    { group: 'Navigation', label: 'Network Tools', detail: 'Inspect network resources and run diagnostics', icon: <Link20Regular />, run: () => { setActiveView('network'); setSelectedResource(null); } },
+    { group: 'Navigation', label: 'Helm Releases', detail: 'Browse release history and revisions', icon: <Box20Regular />, run: () => { setActiveView('helm'); setSelectedResource(null); } },
+    ...NATIVE_OTHERS.map(other => ({
+      group: 'Navigation',
+      label: other.label,
+      detail: `Browse ${other.label.toLowerCase()}`,
+      icon: <Grid20Regular />,
+      run: () => { setActiveView(`other_${other.plural}`); setSelectedResource(null); },
+    })),
+    ...crds.map(crd => ({
+      group: 'Custom Resources',
+      label: crd.kind,
+      detail: `Browse ${crd.plural} custom resources`,
+      icon: <Database20Regular />,
+      run: () => { setActiveView(`custom_${crd.plural}`); setSelectedResource(null); },
+    })),
+    { group: 'Actions', label: 'Refresh current view', detail: 'Reload cluster resources', icon: <ArrowClockwise20Regular />, run: loadData },
+    { group: 'Actions', label: 'Apply YAML manifest', detail: 'Create or update a resource from YAML', icon: <Document20Regular />, run: () => {
+      if (!context) return;
+      setCreateKind('Resource');
+      setCreateBuilderTab('YAML');
+      setYamlToApply('');
+      setIsApplyYamlOpen(true);
+    } },
+    ...(['deployments', 'statefulsets', 'daemonsets', 'cronjobs', 'configmaps', 'secrets', 'persistentvolumeclaims'].includes(activeView)
+      ? [{
+          group: 'Actions',
+          label: `Create ${CREATE_KIND_BY_VIEW[activeView]}`,
+          detail: `Create a new ${CREATE_KIND_BY_VIEW[activeView]} in this view`,
+          icon: <Add20Regular />,
+          run: () => {
+            if (!context) return;
+            const kind = CREATE_KIND_BY_VIEW[activeView];
+            setCreateKind(kind);
+            setCreateBuilderTab(kind === 'ConfigMap' || kind === 'Secret' ? 'Data' : 'General');
+            setIsApplyYamlOpen(true);
+          },
+        }]
+      : []),
+    { group: 'Actions', label: 'Port Forward Manager', detail: 'View and manage active port forwards', icon: <Link20Regular />, run: () => context && setIsPortForwardManagerOpen(true) },
+    { group: 'Actions', label: 'Run command on nodes', detail: 'Open the node command runner in a separate window', icon: <WindowConsole20Regular />, run: () => context && openSectionWindow('node-command', { context }) },
+    { group: 'Actions', label: 'Manage contexts & kubeconfigs', detail: 'View, edit, favorite, or remove contexts', icon: <Cube20Regular />, run: () => setIsContextManagerOpen(true) },
+    { group: 'Actions', label: 'Import kubeconfig', detail: 'Add a kubeconfig file or pasted YAML', icon: <Add20Regular />, run: () => setIsImportOpen(true) },
+    { group: 'Actions', label: 'Open Settings', detail: 'Configure the application', icon: <Settings20Regular />, run: () => setIsSettingsOpen(true) },
+    ...contexts.map(clusterContext => ({
+      group: 'Contexts',
+      label: clusterContext,
+      detail: clusterContext === context ? 'Current Kubernetes context' : 'Switch Kubernetes context',
+      icon: <PresenceBadge status={clusterContext === context ? 'available' : 'unknown'} size="extra-small" />,
+      run: () => { setActiveContext(clusterContext); setActiveView('overview'); setSelectedResource(null); },
+    })),
+    ...resources.map(resource => ({
+      group: 'Resources',
+      label: resource.name,
+      detail: `${activeView}${resource.namespace ? ` · ${resource.namespace}` : ''}`,
+      icon: <Document20Regular />,
+      run: () => setSelectedResource({ type: activeView, name: resource.name, namespace: resource.namespace }),
+    })),
+  ];
+  const normalizedCommandQuery = commandQuery.trim().toLowerCase();
+  const commandResults = commandItems.filter(item => !normalizedCommandQuery || `${item.label} ${item.detail} ${item.group}`.toLowerCase().includes(normalizedCommandQuery)).slice(0, 40);
 
   return (
     <div className={styles.container}>
-      <aside className={styles.sidebar}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1rem' }}>
-          <Title2 style={{ color: 'var(--colorBrandForeground1)', fontWeight: '800' }}>k8sune</Title2>
+      {feedback.dialog}
+      {pendingDelete && <Dialog open onOpenChange={(_, data) => !data.open && setPendingDelete(null)}><DialogSurface style={{ width: 'min(560px, calc(100vw - 32px))' }}><DialogBody><DialogTitle>Delete {pendingDelete.type}</DialogTitle><DialogContent><div style={{ display: 'grid', gap: '14px' }}><div style={{ padding: '12px', borderRadius: '8px', background: 'rgba(255, 153, 0, 0.1)', border: '1px solid rgba(255, 153, 0, 0.25)', fontSize: '0.84rem' }}><strong>Review impact</strong><div style={{ marginTop: '5px' }}>You are deleting <code>{pendingDelete.namespace ? `${pendingDelete.namespace}/` : ''}{pendingDelete.name}</code>. {['namespaces', 'nodes'].includes(pendingDelete.type) ? 'This can affect many workloads and is especially high risk.' : pendingDelete.type === 'persistentvolumeclaims' || pendingDelete.type === 'pvcs' ? 'This may make workload data unavailable; the underlying volume behavior depends on its reclaim policy.' : pendingDelete.type === 'services' || pendingDelete.type === 'other_services' ? 'This immediately removes the service endpoint used by clients.' : 'Dependent workloads may be affected.'}</div></div><div style={{ fontSize: '0.82rem', opacity: 0.72 }}>Run a server-side dry-run first to validate authorization and admission policies without removing anything.</div><Button appearance="secondary" onClick={runDeleteDryRun} disabled={isCheckingDelete}>{isCheckingDelete ? 'Running dry-run…' : 'Run dry-run'}</Button>{deleteDryRunResult && <div style={{ padding: '10px', borderRadius: '7px', background: deleteDryRunResult.startsWith('Server-side') ? 'rgba(44,197,126,0.1)' : 'rgba(255,77,99,0.1)', fontSize: '0.8rem' }}>{deleteDryRunResult}</div>}<div style={{ display: 'grid', gap: '6px' }}><Label>Type <code>{pendingDelete.name}</code> to enable deletion</Label><Input autoFocus value={deleteConfirmationText} onChange={(_, data) => setDeleteConfirmationText(data.value)} placeholder={pendingDelete.name} /></div></div></DialogContent><DialogActions><Button appearance="subtle" onClick={() => setPendingDelete(null)}>Cancel</Button><Button appearance="secondary" icon={<Delete20Regular />} disabled={deleteConfirmationText !== pendingDelete.name} onClick={() => executeDeleteResource(false)}>Delete permanently</Button></DialogActions></DialogBody></DialogSurface></Dialog>}
+      <Dialog open={isPortForwardManagerOpen} onOpenChange={(_, data) => { setIsPortForwardManagerOpen(data.open); if (data.open) loadActivePortForwards(); }}>
+        <DialogSurface style={{ maxWidth: '760px' }}>
+          <DialogBody>
+            <DialogTitle>Port Forward Manager</DialogTitle>
+            <DialogContent>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+                <span style={{ fontSize: '0.82rem', opacity: 0.68 }}>Active sessions for {context}</span>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <Button size="small" icon={<ArrowClockwise20Regular />} onClick={loadActivePortForwards}>Refresh</Button>
+                  <Button size="small" appearance="secondary" icon={<Dismiss16Regular />} onClick={handleStopAllPortForwards} disabled={!activePortForwards.length}>Stop all</Button>
+                </div>
+              </div>
+              {activePortForwards.length ? (
+                <Table size="small">
+                  <TableHeader><TableRow><TableHeaderCell>Service</TableHeaderCell><TableHeaderCell>URL</TableHeaderCell><TableHeaderCell>Status</TableHeaderCell><TableHeaderCell /></TableRow></TableHeader>
+                  <TableBody>
+                    {activePortForwards.map(session => (
+                      <TableRow key={`${session.namespace}-${session.service_name}`}>
+                        <TableCell><strong>{session.service_name}</strong><div style={{ fontSize: '0.75rem', opacity: 0.65 }}>{session.namespace} · :{session.service_port}</div></TableCell>
+                        <TableCell><code>http://127.0.0.1:{session.local_port}</code></TableCell>
+                        <TableCell><Badge color="success" appearance="tint">{session.status || 'active'}</Badge></TableCell>
+                        <TableCell>
+                          <div style={{ display: 'flex', gap: '4px' }}>
+                            <Button size="small" appearance="subtle" onClick={() => handleCopyPortForwardUrl(session)}>Copy URL</Button>
+                            <Button size="small" appearance="subtle" icon={<ArrowClockwise20Regular />} onClick={() => handleReconnectPortForward(session)}>Reconnect</Button>
+                            <Button size="small" appearance="subtle" onClick={() => handleStopPortForward(session.namespace, session.service_name)}>Stop</Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              ) : <div style={{ textAlign: 'center', padding: '36px 0', opacity: 0.65 }}>No active port forwards in this context.</div>}
+            </DialogContent>
+            <DialogActions><Button appearance="primary" onClick={() => setIsPortForwardManagerOpen(false)}>Close</Button></DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+      <Dialog open={isCommandPaletteOpen} onOpenChange={(_, data) => setIsCommandPaletteOpen(data.open)}>
+        <DialogSurface style={{ width: 'min(640px, calc(100vw - 32px))', padding: 0, overflow: 'hidden' }}>
+          <DialogBody style={{ padding: 0 }}>
+            <DialogContent style={{ padding: 0 }}>
+              <Input
+                autoFocus
+                value={commandQuery}
+                onChange={(_, data) => { setCommandQuery(data.value); setSelectedCommandIndex(0); }}
+                onKeyDown={event => {
+                  if (event.key === 'ArrowDown') {
+                    event.preventDefault();
+                    setSelectedCommandIndex(index => Math.min(index + 1, commandResults.length - 1));
+                  } else if (event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    setSelectedCommandIndex(index => Math.max(index - 1, 0));
+                  } else if (event.key === 'Enter' && commandResults[selectedCommandIndex]) {
+                    event.preventDefault();
+                    commandResults[selectedCommandIndex].run();
+                    setIsCommandPaletteOpen(false);
+                  }
+                }}
+                contentBefore={<Search20Regular />}
+                placeholder="Search resources, actions, and navigation…"
+                style={{ width: '100%', padding: '14px 16px', border: 'none', borderBottom: '1px solid var(--colorNeutralStroke1)', borderRadius: 0 }}
+              />
+              <div style={{ maxHeight: '420px', overflowY: 'auto', padding: '8px' }}>
+                {commandResults.length ? commandResults.map((item, index) => (
+                  <Button
+                    key={`${item.group}-${item.label}-${index}`}
+                    appearance="subtle"
+                    onMouseEnter={() => setSelectedCommandIndex(index)}
+                    onClick={() => { item.run(); setIsCommandPaletteOpen(false); }}
+                    style={{ width: '100%', minHeight: '52px', justifyContent: 'flex-start', textAlign: 'left', display: 'flex', gap: '12px', padding: '10px 12px', backgroundColor: index === selectedCommandIndex ? 'var(--colorNeutralBackground3)' : undefined }}
+                  >
+                    {item.icon}
+                    <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+                      <span>{item.label}</span>
+                      <span style={{ fontSize: '0.75rem', opacity: 0.62 }}>{item.group} · {item.detail}</span>
+                    </span>
+                  </Button>
+                )) : (
+                  <div style={{ padding: '28px', textAlign: 'center', opacity: 0.65 }}>No matching commands or resources.</div>
+                )}
+              </div>
+              <div style={{ borderTop: '1px solid var(--colorNeutralStroke1)', padding: '9px 14px', fontSize: '0.75rem', opacity: 0.62 }}>
+                ↑↓ to navigate · Enter to run · Esc to close
+              </div>
+            </DialogContent>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+      {resourceContextMenu && (
+        <div
+          role="menu"
+          style={{ position: 'fixed', top: resourceContextMenu.y, left: resourceContextMenu.x, zIndex: 2000, minWidth: '210px', background: 'var(--colorNeutralBackground2)', border: '1px solid var(--colorNeutralStroke1)', borderRadius: '10px', boxShadow: '0 16px 42px rgba(0,0,0,0.42)', padding: '4px' }}
+          onClick={event => event.stopPropagation()}
+        >
+          <MenuList>{renderResourceActions(resourceContextMenu.resource)}</MenuList>
+        </div>
+      )}
+      {sidebarContextMenu && (
+        <div role="menu" style={{ position: 'fixed', top: sidebarContextMenu.y, left: sidebarContextMenu.x, zIndex: 2000, minWidth: '210px', background: 'var(--colorNeutralBackground2)', border: '1px solid var(--colorNeutralStroke1)', borderRadius: '10px', boxShadow: '0 16px 42px rgba(0,0,0,0.42)', padding: '4px' }} onClick={event => event.stopPropagation()}>
+          <MenuList>
+            {sidebarContextMenu.view ? (
+              <>
+                <MenuItem icon={<Document20Regular />} onClick={() => handleOpenViewWindow(sidebarContextMenu.view!)}>Open in New Window</MenuItem>
+                <MenuItem icon={<ArrowClockwise20Regular />} onClick={() => { setActiveView(sidebarContextMenu.view!); setSelectedResource(null); }}>Go to View</MenuItem>
+              </>
+            ) : (
+              <>
+                <MenuItem icon={<ArrowClockwise20Regular />} onClick={fetchContexts}>Refresh Contexts</MenuItem>
+                <MenuItem icon={<Add20Regular />} onClick={() => setIsImportOpen(true)}>Import Kubeconfig</MenuItem>
+                <MenuItem icon={<Settings20Regular />} onClick={() => setIsSettingsOpen(true)}>Open Settings</MenuItem>
+              </>
+            )}
+          </MenuList>
+        </div>
+      )}
+      <aside className={styles.sidebar} onContextMenu={event => openSidebarContextMenu(event)}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '0.75rem' }}>
           <Menu>
             <MenuTrigger disableButtonEnhancement>
-              <div className={styles.contextDropdown}>
+              <div className={styles.contextDropdown} onContextMenu={event => openSidebarContextMenu(event)}>
                 <span style={{ fontSize: '0.85rem', fontWeight: '500', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '180px' }}>
                   {context || 'Select Context'}
                 </span>
@@ -1281,6 +2006,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                   </MenuItem>
                 ))}
                 <MenuItem icon={<ArrowClockwise20Regular />} onClick={fetchContexts}>Refresh List</MenuItem>
+                <MenuItem icon={<Settings20Regular />} onClick={() => setIsContextManagerOpen(true)}>Manage Contexts</MenuItem>
                 <MenuItem icon={<Add20Regular />} onClick={() => setIsImportOpen(true)}>Import Kubeconfig</MenuItem>
               </MenuList>
             </MenuPopover>
@@ -1291,6 +2017,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
           <Button 
             appearance="subtle" 
             className={styles.sidebarItem}
+            onContextMenu={event => openSidebarContextMenu(event, 'overview')}
             icon={<Apps20Regular />}
             style={activeView === 'overview' ? { backgroundColor: 'var(--colorNeutralBackground3)' } : {}}
             onClick={() => { setActiveView('overview'); setSelectedResource(null); }}
@@ -1300,6 +2027,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
           <Button 
             appearance="subtle" 
             className={styles.sidebarItem}
+            onContextMenu={event => openSidebarContextMenu(event, 'nodes')}
             icon={<Cube20Regular />}
             style={activeView === 'nodes' ? { backgroundColor: 'var(--colorNeutralBackground3)' } : {}}
             onClick={() => { setActiveView('nodes'); setSelectedResource(null); }}
@@ -1309,6 +2037,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
           <Button 
             appearance="subtle" 
             className={styles.sidebarItem}
+            onContextMenu={event => openSidebarContextMenu(event, 'namespaces')}
             icon={<Link20Regular />}
             style={activeView === 'namespaces' ? { backgroundColor: 'var(--colorNeutralBackground3)' } : {}}
             onClick={() => { setActiveView('namespaces'); setSelectedResource(null); }}
@@ -1322,6 +2051,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
           <Button 
             appearance="subtle" 
             className={styles.sidebarItem}
+            onContextMenu={event => openSidebarContextMenu(event, 'pods')}
             icon={<Box20Regular />}
             style={activeView === 'pods' ? { backgroundColor: 'var(--colorNeutralBackground3)' } : {}}
             onClick={() => { setActiveView('pods'); setSelectedResource(null); }}
@@ -1331,6 +2061,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
           <Button 
             appearance="subtle" 
             className={styles.sidebarItem}
+            onContextMenu={event => openSidebarContextMenu(event, 'deployments')}
             icon={<Layer20Regular />}
             style={activeView === 'deployments' ? { backgroundColor: 'var(--colorNeutralBackground3)' } : {}}
             onClick={() => { setActiveView('deployments'); setSelectedResource(null); }}
@@ -1340,6 +2071,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
           <Button 
             appearance="subtle" 
             className={styles.sidebarItem}
+            onContextMenu={event => openSidebarContextMenu(event, 'statefulsets')}
             icon={<Apps20Regular />}
             style={activeView === 'statefulsets' ? { backgroundColor: 'var(--colorNeutralBackground3)' } : {}}
             onClick={() => { setActiveView('statefulsets'); setSelectedResource(null); }}
@@ -1349,6 +2081,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
           <Button 
             appearance="subtle" 
             className={styles.sidebarItem}
+            onContextMenu={event => openSidebarContextMenu(event, 'daemonsets')}
             icon={<Apps20Regular />}
             style={activeView === 'daemonsets' ? { backgroundColor: 'var(--colorNeutralBackground3)' } : {}}
             onClick={() => { setActiveView('daemonsets'); setSelectedResource(null); }}
@@ -1358,6 +2091,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
           <Button 
             appearance="subtle" 
             className={styles.sidebarItem}
+            onContextMenu={event => openSidebarContextMenu(event, 'cronjobs')}
             icon={<ArrowClockwise20Regular />}
             style={activeView === 'cronjobs' ? { backgroundColor: 'var(--colorNeutralBackground3)' } : {}}
             onClick={() => { setActiveView('cronjobs'); setSelectedResource(null); }}
@@ -1371,6 +2105,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
           <Button 
             appearance="subtle" 
             className={styles.sidebarItem}
+            onContextMenu={event => openSidebarContextMenu(event, 'configmaps')}
             icon={<Database20Regular />}
             style={activeView === 'configmaps' ? { backgroundColor: 'var(--colorNeutralBackground3)' } : {}}
             onClick={() => { setActiveView('configmaps'); setSelectedResource(null); }}
@@ -1380,6 +2115,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
           <Button 
             appearance="subtle" 
             className={styles.sidebarItem}
+            onContextMenu={event => openSidebarContextMenu(event, 'secrets')}
             icon={<ShieldLock20Regular />}
             style={activeView === 'secrets' ? { backgroundColor: 'var(--colorNeutralBackground3)' } : {}}
             onClick={() => { setActiveView('secrets'); setSelectedResource(null); }}
@@ -1389,11 +2125,21 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
           <Button 
             appearance="subtle" 
             className={styles.sidebarItem}
+            onContextMenu={event => openSidebarContextMenu(event, 'persistentvolumes')}
             icon={<Storage20Regular />}
             style={activeView === 'persistentvolumes' ? { backgroundColor: 'var(--colorNeutralBackground3)' } : {}}
             onClick={() => { setActiveView('persistentvolumes'); setSelectedResource(null); }}
           >
             PV / PVC
+          </Button>
+          <Button appearance="subtle" className={styles.sidebarItem} icon={<ShieldLock20Regular />} style={activeView === 'rbac' ? { backgroundColor: 'var(--colorNeutralBackground3)' } : {}} onClick={() => { setActiveView('rbac'); setSelectedResource(null); }}>
+            RBAC Inspector
+          </Button>
+          <Button appearance="subtle" className={styles.sidebarItem} icon={<Link20Regular />} style={activeView === 'network' ? { backgroundColor: 'var(--colorNeutralBackground3)' } : {}} onClick={() => { setActiveView('network'); setSelectedResource(null); }}>
+            Network Tools
+          </Button>
+          <Button appearance="subtle" className={styles.sidebarItem} icon={<Box20Regular />} style={activeView === 'helm' ? { backgroundColor: 'var(--colorNeutralBackground3)' } : {}} onClick={() => { setActiveView('helm'); setSelectedResource(null); }}>
+            Helm Releases
           </Button>
 
           <Accordion collapsible>
@@ -1448,6 +2194,17 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
         </div>
 
         <div style={{ marginTop: 'auto', paddingTop: '1rem' }}>
+          <Dialog open={isContextManagerOpen} onOpenChange={(_, data) => setIsContextManagerOpen(data.open)}>
+            <DialogSurface style={{ width: 'min(760px, calc(100vw - 32px))', maxWidth: '760px' }}>
+              <DialogBody><DialogTitle>Contexts & kubeconfig</DialogTitle><DialogContent>
+                {editingContext ? <div style={{ display: 'grid', gap: '12px' }}><div style={{ fontWeight: 600 }}>{editingContext.name}</div><div style={{ display: 'grid', gap: '5px' }}><Label>API server</Label><Input value={editingContext.server || ''} onChange={(_, data) => setEditingContext({ ...editingContext, server: data.value })} /></div><div style={{ display: 'grid', gap: '5px' }}><Label>Default namespace</Label><Input value={editingContext.namespace || ''} onChange={(_, data) => setEditingContext({ ...editingContext, namespace: data.value })} /></div><div style={{ display: 'flex', gap: '8px' }}><Button appearance="primary" onClick={saveContextDetails}>Save</Button><Button appearance="subtle" onClick={() => setEditingContext(null)}>Back</Button></div></div> : <div style={{ display: 'grid', gap: '8px', maxHeight: '55vh', overflowY: 'auto' }}>
+                  {contextDetails.slice().sort((a, b) => Number(b.favorite) - Number(a.favorite) || a.name.localeCompare(b.name)).map(item => <Card key={item.name} style={{ background: item.name === context ? 'var(--accent-bg)' : 'var(--colorNeutralBackground2)' }}><div style={{ padding: '12px', display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: '12px', alignItems: 'center' }}><div><div style={{ display: 'flex', gap: '7px', alignItems: 'center', fontWeight: 600 }}>{item.name}{item.favorite && <span title="Favorite">★</span>}{item.name === context && <Badge color="success" appearance="tint">Current</Badge>}</div><div style={{ fontSize: '0.78rem', opacity: 0.7, marginTop: '4px', overflowWrap: 'anywhere' }}>{item.cluster || 'Unknown cluster'} · {item.server || 'Server unavailable'} · {item.namespace || 'default'}</div><div style={{ fontSize: '0.74rem', opacity: 0.55, marginTop: '2px' }}>User: {item.user || 'default'}</div></div><div style={{ display: 'flex', gap: '4px' }}><Button size="small" appearance="subtle" onClick={() => toggleFavoriteContext(item)}>{item.favorite ? 'Unfavorite' : 'Favorite'}</Button><Button size="small" appearance="subtle" onClick={() => { setActiveContext(item.name); setActiveView('overview'); setIsContextManagerOpen(false); }}>Use</Button><Button size="small" appearance="subtle" onClick={() => setEditingContext(item)}>Edit</Button><Button size="small" appearance="subtle" style={{ color: 'var(--colorPaletteRedForeground1)' }} onClick={() => removeContext(item)}>Remove</Button></div></div></Card>)}
+                  {contextDetails.length === 0 && <span style={{ opacity: 0.65 }}>No contexts found. Import a kubeconfig to add one.</span>}
+                  <Button appearance="secondary" icon={<Add20Regular />} onClick={() => { setIsContextManagerOpen(false); setIsImportOpen(true); }}>Add kubeconfig</Button>
+                </div>}
+              </DialogContent><DialogActions><Button appearance="subtle" onClick={() => setIsContextManagerOpen(false)}>Close</Button></DialogActions></DialogBody>
+            </DialogSurface>
+          </Dialog>
           <Dialog open={isImportOpen} onOpenChange={(_, data) => setIsImportOpen(data.open)}>
             <DialogSurface>
                 <DialogBody>
@@ -1462,7 +2219,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                                 {importTab === 'file' ? (
                                     <div style={{ textAlign: 'center', padding: '2rem', border: '1px dashed var(--colorNeutralStroke1)', borderRadius: '8px' }}>
                                         <Button icon={<ArrowUpload20Regular />} onClick={handleImport}>Choose File</Button>
-                                        <div style={{ marginTop: '0.5rem', fontSize: '0.8rem', opacity: 0.6 }}>Select your .kube/config or other cluster YAML</div>
+                                        <div style={{ marginTop: '0.5rem', fontSize: '0.8rem', opacity: 0.6 }}>Select any kubeconfig file from your device</div>
                                     </div>
                                 ) : (
                                     <Textarea 
@@ -1496,6 +2253,33 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                   <div className={styles.settingsContent}>
                     <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '1rem' }}>
                        <img src="/sprites/k8sune-wave.png" alt="wave" style={{ width: '180px', height: 'auto' }} />
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <Label weight="semibold">Accent color</Label>
+                        <span style={{ fontSize: '0.75rem', opacity: 0.62 }}>Personalization</span>
+                      </div>
+                      <div className={styles.accentOptions} aria-label="Accent color">
+                        {ACCENT_OPTIONS.map(option => (
+                          <Button
+                            key={option.id}
+                            className={styles.accentButton}
+                            appearance="subtle"
+                            aria-label={`Use ${option.label} accent`}
+                            title={option.label}
+                            onClick={() => setAccent(option.id)}
+                            style={{
+                              backgroundColor: option.color,
+                              border: accent === option.id ? '3px solid #f5f7ff' : '2px solid transparent',
+                              boxShadow: accent === option.id ? `0 0 0 2px ${option.color}` : 'none',
+                            }}
+                          />
+                        ))}
+                      </div>
+                      <span style={{ fontSize: '0.78rem', opacity: 0.68 }}>
+                        {ACCENT_OPTIONS.find(option => option.id === accent)?.label} is active. This preference is saved on this device.
+                      </span>
                     </div>
                     
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
@@ -1566,6 +2350,73 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
               )}
             </div>
             <div className={styles.headerControls}>
+              {context && !selectedResource && ['overview', 'nodes', 'services', 'other_services'].includes(activeView) && (
+                <>
+                  <Button appearance="subtle" size="small" icon={<Link20Regular />} onClick={() => setIsPortForwardManagerOpen(true)}>
+                    Port Forwards{activePortForwards.length ? ` (${activePortForwards.length})` : ''}
+                  </Button>
+                </>
+              )}
+              {context && !selectedResource && activeView === 'nodes' && <><Button appearance="secondary" size="small" icon={<WindowConsole20Regular />} onClick={() => openSectionWindow('node-command', { context })}>Run on Nodes</Button><Dialog open={isNodeCommandOpen} onOpenChange={(_, data) => setIsNodeCommandOpen(data.open)}><DialogSurface style={{ width: 'min(820px, calc(100vw - 32px))', maxWidth: '820px' }}><DialogBody><DialogTitle>Run command on all nodes</DialogTitle><DialogContent><div style={{ display: 'grid', gap: '12px' }}><span style={{ fontSize: '0.82rem', opacity: 0.7 }}>Runs an isolated Alpine Pod on every node, collects output, then automatically removes all runner Pods.</span><Textarea value={nodeCommand} onChange={(_, data) => setNodeCommand(data.value)} resize="vertical" style={{ minHeight: '88px', fontFamily: 'var(--fontFamilyMonospace)' }} /><div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><Label>Timeout</Label><Input type="number" min="5" max="300" value={nodeCommandTimeout} onChange={(_, data) => setNodeCommandTimeout(data.value)} style={{ width: '100px' }} /><span style={{ fontSize: '0.78rem', opacity: 0.65 }}>seconds (5–300)</span></div>{nodeCommandResult.length > 0 && <Table><TableHeader><TableRow><TableHeaderCell>Node</TableHeaderCell><TableHeaderCell>Status</TableHeaderCell><TableHeaderCell>Output</TableHeaderCell></TableRow></TableHeader><TableBody>{nodeCommandResult.map(result => <TableRow key={result.node}><TableCell>{result.node}</TableCell><TableCell><Badge color={result.status === 'Succeeded' ? 'success' : 'important'}>{result.status}</Badge></TableCell><TableCell><code style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{result.output}</code></TableCell></TableRow>)}</TableBody></Table>}</div></DialogContent><DialogActions><Button appearance="subtle" onClick={() => setIsNodeCommandOpen(false)}>Close</Button><Button appearance="primary" onClick={runNodeCommand} disabled={isRunningNodeCommand || !nodeCommand.trim()}>{isRunningNodeCommand ? 'Running…' : 'Run command'}</Button></DialogActions></DialogBody></DialogSurface></Dialog></>}
+              {context && !selectedResource && ['deployments', 'statefulsets', 'daemonsets', 'cronjobs', 'configmaps', 'secrets', 'persistentvolumeclaims'].includes(activeView) && (
+                <>
+                  <Button appearance="primary" size="small" icon={<Add20Regular />} onClick={() => {
+                    const kind = CREATE_KIND_BY_VIEW[activeView];
+                    if (kind) setCreateKind(kind);
+                    setCreateBuilderTab(kind === 'ConfigMap' || kind === 'Secret' ? 'Data' : 'General');
+                    setIsApplyYamlOpen(true);
+                  }}>
+                    Create Resource
+                  </Button>
+                  <Dialog open={isApplyYamlOpen} onOpenChange={(_, data) => setIsApplyYamlOpen(data.open)}>
+                    <DialogSurface style={{ width: 'min(960px, calc(100vw - 32px))', maxWidth: '960px', maxHeight: 'calc(100vh - 32px)' }}>
+                      <DialogBody>
+                        <DialogTitle>Create {createKind}</DialogTitle>
+                        <DialogContent>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', overflowY: 'auto', maxHeight: 'calc(100vh - 190px)', paddingRight: '4px' }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 0.9fr) minmax(220px, 1.2fr) minmax(140px, 0.65fr)', gap: '14px' }}>
+                              <div style={{ display: 'grid', gap: '5px' }}><Label>Namespace</Label><Dropdown placeholder="Manifest namespace" value={applyNamespace || undefined} selectedOptions={applyNamespace ? [applyNamespace] : []} onOptionSelect={(_, data) => setApplyNamespace(data.optionValue || '')}>{namespaces.map(ns => <Option key={ns} value={ns}>{ns}</Option>)}</Dropdown></div>
+                              <div style={{ display: 'grid', gap: '5px' }}><Label>Name</Label><Input placeholder="my-resource" value={createName} onChange={(_, data) => setCreateName(data.value)} /></div>
+                              {['Deployment', 'StatefulSet'].includes(createKind) && <div style={{ display: 'grid', gap: '5px' }}><Label>Replicas</Label><Input type="number" value={createReplicas} onChange={(_, data) => setCreateReplicas(data.value)} /></div>}
+                            </div>
+                            <div style={{ display: 'grid', gap: '5px' }}><Label>Description <span style={{ opacity: 0.6, fontWeight: 'normal' }}>(optional)</span></Label><Input placeholder="A short description for future operators" value={createDescription} onChange={(_, data) => setCreateDescription(data.value)} /></div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '160px minmax(0, 1fr)', minHeight: '310px', borderTop: '1px solid var(--colorNeutralStroke1)', borderBottom: '1px solid var(--colorNeutralStroke1)' }}>
+                              <nav style={{ padding: '14px 10px', borderRight: '1px solid var(--colorNeutralStroke1)', display: 'flex', flexDirection: 'column', gap: '4px', background: 'rgba(255,255,255,0.018)' }}>{(['ConfigMap', 'Secret'].includes(createKind) ? ['Data', 'Metadata', 'YAML'] : createKind === 'PersistentVolumeClaim' ? ['Storage', 'Metadata', 'YAML'] : ['General', 'Scheduling', 'Resources', 'Metadata', 'YAML']).map(tab => <Button key={tab} appearance={createBuilderTab === tab ? 'secondary' : 'subtle'} size="small" style={{ justifyContent: 'flex-start' }} onClick={() => setCreateBuilderTab(tab)}>{tab}</Button>)}</nav>
+                              <section style={{ padding: '16px', minWidth: 0 }}>
+                                {createBuilderTab === 'General' && <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}><div style={{ gridColumn: '1 / -1', display: 'grid', gap: '5px' }}><Label>Container image</Label><Input placeholder="nginx:latest" value={createImage} onChange={(_, data) => setCreateImage(data.value)} /></div><div style={{ display: 'grid', gap: '5px' }}><Label>Command</Label><Input placeholder="/bin/sh -c run" value={createCommand} onChange={(_, data) => setCreateCommand(data.value)} /></div><div style={{ display: 'grid', gap: '5px' }}><Label>Environment</Label><Input placeholder="KEY=value, KEY2=value" value={createEnv} onChange={(_, data) => setCreateEnv(data.value)} /></div>{createKind === 'CronJob' && <div style={{ display: 'grid', gap: '5px' }}><Label>Schedule</Label><Input value={createSchedule} onChange={(_, data) => setCreateSchedule(data.value)} /></div>}</div>}
+                                {createBuilderTab === 'Data' && (createKind === 'Secret' ? <div style={{ display: 'grid', gap: '14px' }}>
+                                  <div style={{ display: 'grid', gap: '5px', maxWidth: '360px' }}><Label>Secret type</Label><Dropdown value={createSecretType} selectedOptions={[createSecretType]} onOptionSelect={(_, data) => setCreateSecretType(data.optionValue || 'Opaque')}>
+                                    <Option value="Opaque">Opaque</Option><Option value="kubernetes.io/service-account-token">Service account token</Option><Option value="kubernetes.io/tls">TLS certificate</Option><Option value="kubernetes.io/dockerconfigjson">Docker registry credentials</Option><Option value="kubernetes.io/basic-auth">Basic authentication</Option><Option value="kubernetes.io/ssh-auth">SSH authentication</Option>
+                                  </Dropdown></div>
+                                  {createSecretType === 'kubernetes.io/service-account-token' ? <div style={{ display: 'grid', gap: '5px', maxWidth: '420px' }}><Label>Service account name</Label><Input placeholder="default" value={createSecretServiceAccount} onChange={(_, data) => setCreateSecretServiceAccount(data.value)} /><span style={{ fontSize: '0.78rem', opacity: 0.65 }}>Kubernetes will populate the token data after this Secret is created.</span></div>
+                                    : <div style={{ display: 'grid', gridTemplateColumns: createSecretType === 'kubernetes.io/dockerconfigjson' || createSecretType === 'kubernetes.io/ssh-auth' ? '1fr' : '1fr 1fr', gap: '14px', alignItems: 'start' }}>
+                                      {createSecretType === 'Opaque' && <div style={{ display: 'grid', gap: '5px' }}><Label>Key</Label><Input value={createDataKey} onChange={(_, data) => setCreateDataKey(data.value)} /></div>}
+                                      <div style={{ display: 'grid', gap: '5px' }}><Label>{createSecretType === 'kubernetes.io/tls' ? 'Certificate (tls.crt)' : createSecretType === 'kubernetes.io/basic-auth' ? 'Username' : createSecretType === 'kubernetes.io/dockerconfigjson' ? 'Docker config JSON' : createSecretType === 'kubernetes.io/ssh-auth' ? 'Private key' : 'Value'}</Label><Textarea value={createDataValue} onChange={(_, data) => setCreateDataValue(data.value)} resize="vertical" style={{ height: '112px', minHeight: '112px', fontFamily: 'var(--fontFamilyMonospace)' }} /></div>
+                                      {['kubernetes.io/tls', 'kubernetes.io/basic-auth'].includes(createSecretType) && <div style={{ display: 'grid', gap: '5px' }}><Label>{createSecretType === 'kubernetes.io/tls' ? 'Private key (tls.key)' : 'Password'}</Label><Textarea value={createSecretSecondaryValue} onChange={(_, data) => setCreateSecretSecondaryValue(data.value)} resize="vertical" style={{ height: '112px', minHeight: '112px', fontFamily: 'var(--fontFamilyMonospace)' }} /></div>}
+                                    </div>}
+                                  <span style={{ fontSize: '0.78rem', opacity: 0.65 }}>Values are applied with <code>stringData</code>; Kubernetes encodes them safely.</span>
+                                </div> : <div style={{ display: 'grid', gridTemplateColumns: 'minmax(170px, 0.7fr) minmax(240px, 1.3fr)', gap: '14px', alignItems: 'start' }}><div style={{ display: 'grid', gap: '5px', alignSelf: 'start' }}><Label>Key</Label><Input value={createDataKey} onChange={(_, data) => setCreateDataKey(data.value)} style={{ alignSelf: 'start' }} /></div><div style={{ display: 'grid', gap: '5px', alignSelf: 'start' }}><Label>Value</Label><Textarea value={createDataValue} onChange={(_, data) => setCreateDataValue(data.value)} resize="vertical" style={{ height: '112px', minHeight: '112px', fontFamily: 'var(--fontFamilyMonospace)' }} /></div><span style={{ gridColumn: '1 / -1', fontSize: '0.78rem', opacity: 0.65 }}>Add additional entries in the generated YAML.</span></div>)}
+                                {createBuilderTab === 'Storage' && <div style={{ display: 'grid', gap: '5px', maxWidth: '260px' }}><Label>Requested storage</Label><Input value={createStorage} onChange={(_, data) => setCreateStorage(data.value)} /></div>}
+                                {createBuilderTab === 'Scheduling' && <div style={{ display: 'grid', gap: '14px' }}><div><Label>Service account</Label><Input placeholder="default" value={createServiceAccount} onChange={(_, data) => setCreateServiceAccount(data.value)} /></div><div><Label>Node selector</Label><Input placeholder="disktype=ssd, topology.kubernetes.io/zone=zone-a" value={createNodeSelector} onChange={(_, data) => setCreateNodeSelector(data.value)} /></div><span style={{ fontSize: '0.78rem', opacity: 0.65 }}>Applies to workload pod templates.</span></div>}
+                                {createBuilderTab === 'Resources' && <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}><div><Label>CPU request</Label><Input placeholder="100m" value={createCpuRequest} onChange={(_, data) => setCreateCpuRequest(data.value)} /></div><div><Label>Memory request</Label><Input placeholder="128Mi" value={createMemoryRequest} onChange={(_, data) => setCreateMemoryRequest(data.value)} /></div><div><Label>CPU limit</Label><Input placeholder="500m" value={createCpuLimit} onChange={(_, data) => setCreateCpuLimit(data.value)} /></div><div><Label>Memory limit</Label><Input placeholder="512Mi" value={createMemoryLimit} onChange={(_, data) => setCreateMemoryLimit(data.value)} /></div></div>}
+                                {createBuilderTab === 'Metadata' && <span style={{ fontSize: '0.86rem', opacity: 0.72 }}>Name, namespace, and description are above. Add arbitrary labels and annotations in YAML.</span>}
+                                {createBuilderTab === 'YAML' && <Textarea id="yaml-resource" placeholder={'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: example'} value={yamlToApply} onChange={(_, data) => setYamlToApply(data.value)} resize="vertical" style={{ width: '100%', height: '260px', fontFamily: 'var(--fontFamilyMonospace)' }} />}
+                              </section>
+                            </div>
+                            {createBuilderTab !== 'YAML' && <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><span style={{ fontSize: '0.78rem', opacity: 0.65 }}>Review and customize the YAML before applying.</span><Button appearance="secondary" icon={<Document20Regular />} onClick={() => { generateResourceManifest(); setCreateBuilderTab('YAML'); }}>Generate YAML</Button></div>}
+                          </div>
+                        </DialogContent>
+                        <DialogActions>
+                          <Button appearance="subtle" onClick={() => setIsApplyYamlOpen(false)} disabled={isApplyingYaml}>Cancel</Button>
+                          <Button appearance="primary" icon={<Add20Regular />} onClick={handleApplyYaml} disabled={!yamlToApply.trim() || isApplyingYaml}>
+                            {isApplyingYaml ? 'Applying…' : 'Apply YAML'}
+                          </Button>
+                        </DialogActions>
+                      </DialogBody>
+                    </DialogSurface>
+                  </Dialog>
+                </>
+              )}
               {context && !selectedResource && activeView !== 'overview' && activeView !== 'nodes' && activeView !== 'namespaces' && (
                   <Dropdown
                     multiselect
@@ -1625,7 +2476,10 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                         <Spinner label="Loading details..." />
                     </div>
                 ) : resourceDetail ? (
-                    <div className={styles.detailView}>
+                    <div
+                        className={styles.detailView}
+                        style={selectedResource.type === 'configmaps' ? { flex: 1, minHeight: 0, overflow: 'hidden' } : undefined}
+                    >
                         <TabList size="small" selectedValue={detailTab} onTabSelect={(_, data) => setDetailTab(data.value as string)}>
                             <Tab value="overview">Overview</Tab>
                             <Tab value="events">Events ({detailEvents.length})</Tab>
@@ -1633,10 +2487,13 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                         </TabList>
 
                         {detailTab === 'overview' && (
+                            selectedResource.type === 'configmaps' ? (
+                                <ConfigMapEditorDetail context={context} resource={resourceDetail} />
+                            ) : (
                             <div className={styles.detailSection}>
                                 <div style={{ 
                                     display: 'grid', 
-                                    gridTemplateColumns: ['nodes', 'deployments', 'statefulsets', 'daemonsets', 'namespaces', 'services', 'other_services', 'ingresses', 'other_ingresses', 'replicasets', 'other_replicasets', 'jobs', 'other_jobs', 'cronjobs', 'pods'].includes(selectedResource.type) || selectedResource.type.startsWith('custom_') ? '1fr 1fr' : '1fr', 
+                                    gridTemplateColumns: ['nodes', 'deployments', 'statefulsets', 'daemonsets', 'namespaces', 'services', 'other_services', 'ingresses', 'other_ingresses', 'replicasets', 'other_replicasets', 'jobs', 'other_jobs', 'cronjobs', 'pods', 'configmaps'].includes(selectedResource.type) || selectedResource.type.startsWith('custom_') ? '1fr 1fr' : '1fr',
                                     gap: '1rem', 
                                     alignItems: 'stretch',
                                     marginBottom: '1rem'
@@ -1669,6 +2526,19 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                                             )}
                                         </div>
                                     </Card>
+
+                                    {selectedResource.type === 'secrets' && resourceDetail.spec && (
+                                        <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)', height: '100%' }}>
+                                            <CardHeader header={<Subtitle2>{resourceDetail.spec.type === 'kubernetes.io/tls' ? 'TLS Certificate' : 'Secret Details'}</Subtitle2>} />
+                                            <div style={{ padding: '1rem', display: 'grid', gap: '10px' }}>
+                                                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}><span style={{ opacity: 0.65, fontSize: '0.82rem' }}>Type</span><Badge appearance="tint" color="brand">{resourceDetail.spec.type || 'Opaque'}</Badge></div>
+                                                {resourceDetail.spec.data_keys?.length > 0 && <div><span style={{ opacity: 0.65, fontSize: '0.82rem' }}>Keys</span><div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', marginTop: '5px' }}>{resourceDetail.spec.data_keys.map((key: string) => <Badge key={key} appearance="outline">{key}</Badge>)}</div></div>}
+                                                {resourceDetail.spec.tls_info && (resourceDetail.spec.tls_info.error ? <span style={{ color: 'var(--colorPaletteRedForeground1)', fontSize: '0.82rem' }}>{resourceDetail.spec.tls_info.error}</span> : <div style={{ display: 'grid', gridTemplateColumns: '120px minmax(0, 1fr)', gap: '7px 12px', fontSize: '0.82rem' }}>
+                                                    {[["Subject", resourceDetail.spec.tls_info.subject], ["Issuer", resourceDetail.spec.tls_info.issuer], ["Serial", resourceDetail.spec.tls_info.serial], ["Valid from", resourceDetail.spec.tls_info.not_before], ["Valid until", resourceDetail.spec.tls_info.not_after], ["SANs", resourceDetail.spec.tls_info.sans]].map(([label, value]) => <div key={label} style={{ display: 'contents' }}><span style={{ opacity: 0.65 }}>{label}</span><code style={{ overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>{value as string}</code></div>)}
+                                                </div>)}
+                                            </div>
+                                        </Card>
+                                    )}
 
                                     {selectedResource.type === 'nodes' && (
                                         <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)', height: '100%' }}>
@@ -1831,6 +2701,27 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                                         </Card>
                                     )}
 
+                                    {selectedResource.type === 'configmaps' && resourceDetail.spec && (
+                                        <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)', height: '100%' }}>
+                                            <CardHeader header={<Subtitle2>ConfigMap Data</Subtitle2>} />
+                                            <div style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '260px', overflowY: 'auto' }}>
+                                                {Object.entries(resourceDetail.spec.data || {}).length > 0 ? (
+                                                    Object.entries(resourceDetail.spec.data).map(([key, value]) => (
+                                                        <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                                            <span style={{ fontSize: '0.76rem', fontWeight: 600 }}>{key}</span>
+                                                            <code style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{String(value)}</code>
+                                                        </div>
+                                                    ))
+                                                ) : (
+                                                    <span style={{ fontSize: '0.85rem', opacity: 0.65 }}>No text data.</span>
+                                                )}
+                                                {resourceDetail.spec.binary_data_keys?.length > 0 && (
+                                                    <span style={{ fontSize: '0.78rem', opacity: 0.65 }}>Binary values: {resourceDetail.spec.binary_data_keys.join(', ')}</span>
+                                                )}
+                                            </div>
+                                        </Card>
+                                    )}
+
                                     {selectedResource.type.startsWith('custom_') && resourceDetail.spec && (
                                         <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)', height: '100%' }}>
                                             <CardHeader header={<Subtitle2>Spec Summary</Subtitle2>} />
@@ -1980,6 +2871,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                                                             <TableHeaderCell style={{ width: '80px' }}>Status</TableHeaderCell>
                                                             <TableHeaderCell style={{ width: '70px' }}>CPU</TableHeaderCell>
                                                             <TableHeaderCell style={{ width: '70px' }}>Memory</TableHeaderCell>
+                                                            <TableHeaderCell style={{ width: '142px' }}>Actions</TableHeaderCell>
                                                         </TableRow>
                                                     </TableHeader>
                                                     <TableBody>
@@ -2002,6 +2894,12 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                                                                     </TableCell>
                                                                     <TableCell><span style={{ fontSize: '0.75rem' }}>{cpu}</span></TableCell>
                                                                     <TableCell><span style={{ fontSize: '0.75rem' }}>{mem}</span></TableCell>
+                                                                    <TableCell>
+                                                                        <div style={{ display: 'flex', gap: '4px' }}>
+                                                                            <Button size="small" appearance="subtle" icon={<TextBulletList20Regular />} onClick={() => handleOpenLogs(p.namespace || selectedResource.namespace || 'default', p.name)}>Logs</Button>
+                                                                            <Button size="small" appearance="subtle" icon={<WindowConsole20Regular />} onClick={() => handleOpenShell(p.namespace || selectedResource.namespace || 'default', p.name, p.containers?.[0] || 'default')}>Shell</Button>
+                                                                        </div>
+                                                                    </TableCell>
                                                                 </TableRow>
                                                             );
                                                         })}
@@ -2014,32 +2912,15 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                                      </Card>
                                 )}
                             </div>
+                            )
                         )}
 
                         {detailTab === 'events' && (
                             <div className={styles.tableCard}>
-                                <Table>
-                                    <TableHeader>
-                                        <TableRow style={{ backgroundColor: 'var(--colorNeutralBackground3)' }}>
-                                            <TableHeaderCell style={{ width: '80px' }}>Type</TableHeaderCell>
-                                            <TableHeaderCell style={{ width: '150px' }}>Reason</TableHeaderCell>
-                                            <TableHeaderCell>Message</TableHeaderCell>
-                                            <TableHeaderCell style={{ width: '150px' }}>Last Seen</TableHeaderCell>
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                        {detailEvents.map((e, idx) => (
-                                            <TableRow key={idx}>
-                                                <TableCell>
-                                                    {e.type === 'Normal' ? <CheckmarkCircle20Regular style={{ color: '#10b981' }} /> : <Warning20Regular style={{ color: '#ef4444' }} />}
-                                                </TableCell>
-                                                <TableCell><strong>{e.reason}</strong></TableCell>
-                                                <TableCell><span style={{ fontSize: '0.85rem' }}>{e.message}</span></TableCell>
-                                                <TableCell><span style={{ fontSize: '0.8rem', opacity: 0.7 }}>{new Date(e.last_timestamp).toLocaleString()}</span></TableCell>
-                                            </TableRow>
-                                        ))}
-                                    </TableBody>
-                                </Table>
+                                <div style={{ padding: '18px' }}>
+                                  {detailEventsWarnings.length > 0 && <div style={{ marginBottom: '12px', padding: '10px 12px', borderRadius: '7px', fontSize: '0.8rem', background: 'rgba(255, 166, 0, 0.1)', border: '1px solid rgba(255, 166, 0, 0.25)' }}><strong>Some event sources could not be queried.</strong><div style={{ marginTop: '4px', opacity: 0.72 }}>{detailEventsWarnings[0]}</div></div>}
+                                  <EventTimeline events={detailEvents} emptyLabel={selectedResource.type === 'namespaces' ? 'No events recorded in this namespace.' : 'No events recorded for this resource.'} />
+                                </div>
                             </div>
                         )}
 
@@ -2069,6 +2950,60 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                         Failed to load resource details.
                     </div>
                 )
+            ) : activeView === 'helm' ? (
+                <div style={{ display: 'grid', gap: '16px' }}>
+                  {helmRelease && <Dialog open onOpenChange={(_, data) => !data.open && setHelmRelease(null)}><DialogSurface style={{ width: 'min(920px, calc(100vw - 32px))' }}><DialogBody><DialogTitle>{helmRelease.name} · Helm history</DialogTitle><DialogContent><div style={{ display: 'grid', gap: '14px' }}><Table><TableHeader><TableRow><TableHeaderCell>Revision</TableHeaderCell><TableHeaderCell>Status</TableHeaderCell><TableHeaderCell>Chart</TableHeaderCell><TableHeaderCell>Updated</TableHeaderCell><TableHeaderCell /></TableRow></TableHeader><TableBody>{helmHistory.map(item => <TableRow key={item.revision}><TableCell>{item.revision}</TableCell><TableCell><Badge color={item.status === 'deployed' ? 'success' : 'warning'}>{item.status}</Badge></TableCell><TableCell>{item.chart}</TableCell><TableCell>{item.updated}</TableCell><TableCell><Button size="small" appearance="secondary" onClick={async () => { if (!await feedback.confirm('Rollback Helm release?', `Rollback ${helmRelease.name} to revision ${item.revision}?`, { confirmLabel: 'Rollback', destructive: true })) return; await apiFetch(`/api/helm/${context}/releases/${encodeURIComponent(helmRelease.namespace)}/${encodeURIComponent(helmRelease.name)}/rollback`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ revision: item.revision }) }); setHelmRelease(null); loadData(); }}>Rollback</Button></TableCell></TableRow>)}</TableBody></Table><div><Title3>Values diff: latest revision</Title3><pre style={{ maxHeight: '280px', overflow: 'auto', whiteSpace: 'pre-wrap', padding: '12px', borderRadius: '8px', background: 'rgba(0,0,0,0.24)', fontSize: '0.76rem' }}>{helmValuesDiff}</pre></div></div></DialogContent><DialogActions><Button onClick={() => setHelmRelease(null)}>Close</Button></DialogActions></DialogBody></DialogSurface></Dialog>}
+                  <div className={styles.overviewGrid}><Card className={styles.metricCard}><Title3>Helm releases</Title3><div style={{ fontSize: '2rem', fontWeight: 700 }}>{helmData?.releases?.length || 0}</div></Card><Card className={styles.metricCard}><Title3>Deployed</Title3><div style={{ fontSize: '2rem', fontWeight: 700 }}>{helmData?.releases?.filter((item: any) => item.status === 'deployed').length || 0}</div></Card></div>
+                  <div className={styles.tableCard}><Table><TableHeader><TableRow><TableHeaderCell>Release</TableHeaderCell><TableHeaderCell>Namespace</TableHeaderCell><TableHeaderCell>Status</TableHeaderCell><TableHeaderCell>Chart</TableHeaderCell><TableHeaderCell>App version</TableHeaderCell><TableHeaderCell>Revision</TableHeaderCell></TableRow></TableHeader><TableBody>{helmData?.releases?.map((item: any) => <TableRow key={`${item.namespace}/${item.name}`} onClick={() => openHelmRelease(item)} style={{ cursor: 'pointer' }}><TableCell><strong>{item.name}</strong></TableCell><TableCell>{item.namespace}</TableCell><TableCell><Badge color={item.status === 'deployed' ? 'success' : 'warning'}>{item.status}</Badge></TableCell><TableCell>{item.chart}</TableCell><TableCell>{item.app_version || '—'}</TableCell><TableCell>{item.revision}</TableCell></TableRow>)}</TableBody></Table></div>
+                </div>
+            ) : activeView === 'persistentvolumes' ? (
+                <div style={{ display: 'grid', gap: '16px' }}>
+                  <div className={styles.overviewGrid}>
+                    {[
+                      ['PVCs', storageData?.summary?.pvc_count],
+                      ['Bound claims', storageData?.summary?.bound_pvc_count],
+                      ['PersistentVolumes', storageData?.summary?.pv_count],
+                      ['Attached volumes', storageData?.summary?.attached_count],
+                    ].map(([label, value]) => <Card key={label as string} className={styles.metricCard}><Title3>{label}</Title3><div style={{ fontSize: '2rem', fontWeight: 700 }}>{value ?? 0}</div></Card>)}
+                  </div>
+                  <Card className={styles.tableCard}><div style={{ padding: '14px 18px', display: 'flex', gap: '28px', flexWrap: 'wrap' }}><div><span style={{ fontSize: '0.76rem', opacity: 0.62 }}>Requested capacity</span><div style={{ fontSize: '1.1rem', fontWeight: 600 }}>{storageData?.summary?.requested_bytes ? `${(storageData.summary.requested_bytes / 1024 ** 3).toFixed(2)} GiB` : '—'}</div></div><div><span style={{ fontSize: '0.76rem', opacity: 0.62 }}>PV capacity</span><div style={{ fontSize: '1.1rem', fontWeight: 600 }}>{storageData?.summary?.capacity_bytes ? `${(storageData.summary.capacity_bytes / 1024 ** 3).toFixed(2)} GiB` : '—'}</div></div><div style={{ fontSize: '0.8rem', opacity: 0.67, maxWidth: '480px' }}>Capacity is calculated from the storage quantities advertised by PersistentVolumes and requested by claims.</div></div></Card>
+                  {storageData?.risks?.length > 0 && <Card className={styles.tableCard} style={{ borderColor: 'rgba(255, 166, 0, 0.35)' }}><div style={{ padding: '14px 18px' }}><div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><Title3>Storage attention</Title3><Badge color="warning">{storageData.risks.length} item{storageData.risks.length === 1 ? '' : 's'}</Badge></div><div style={{ display: 'grid', gap: '7px', marginTop: '10px' }}>{storageData.risks.slice(0, 6).map((risk: any, index: number) => <div key={index} style={{ fontSize: '0.82rem' }}><Badge color={risk.severity === 'danger' ? 'danger' : risk.severity === 'warning' ? 'warning' : 'informative'}>{risk.severity}</Badge> <strong>{risk.title}</strong><span style={{ opacity: 0.68 }}> — {risk.detail}</span></div>)}</div></div></Card>}
+                  <TabList selectedValue={storageSection} onTabSelect={(_, data) => setStorageSection(data.value as typeof storageSection)}><Tab value="pvcs">PersistentVolumeClaims</Tab><Tab value="pvs">PersistentVolumes</Tab><Tab value="classes">StorageClasses</Tab><Tab value="attachments">VolumeAttachments</Tab><Tab value="snapshots">Snapshots ({storageData?.snapshots?.length || 0})</Tab></TabList>
+                  {storageSection === 'pvcs' && <div className={styles.tableCard}><Table><TableHeader><TableRow><TableHeaderCell>Claim</TableHeaderCell><TableHeaderCell>Status</TableHeaderCell><TableHeaderCell>Requested</TableHeaderCell><TableHeaderCell>Capacity</TableHeaderCell><TableHeaderCell>StorageClass</TableHeaderCell><TableHeaderCell>Workloads using it</TableHeaderCell></TableRow></TableHeader><TableBody>{storageData?.pvcs?.map((item: any) => <TableRow key={`${item.namespace}/${item.name}`}><TableCell><strong>{item.namespace}/{item.name}</strong><div style={{ fontSize: '0.75rem', opacity: 0.62 }}>{item.access_modes.join(', ')}</div>{item.conditions?.filter((condition: any) => condition.status === 'True').map((condition: any) => <Badge key={condition.type} color="warning" size="small">{condition.type}</Badge>)}</TableCell><TableCell><Badge color={item.status === 'Bound' ? 'success' : 'warning'}>{item.status}</Badge></TableCell><TableCell>{item.requested}</TableCell><TableCell>{item.capacity}</TableCell><TableCell>{item.storage_class}</TableCell><TableCell>{item.consumers?.length ? item.consumers.map((consumer: any) => <div key={consumer.pod} style={{ fontSize: '0.78rem' }}><strong>{consumer.pod}</strong> · {consumer.node} · {consumer.phase}</div>) : <span style={{ opacity: 0.6 }}>Not mounted</span>}</TableCell></TableRow>)}</TableBody></Table></div>}
+                  {storageSection === 'pvs' && <div className={styles.tableCard}><Table><TableHeader><TableRow><TableHeaderCell>PersistentVolume</TableHeaderCell><TableHeaderCell>Status</TableHeaderCell><TableHeaderCell>Capacity</TableHeaderCell><TableHeaderCell>Claim</TableHeaderCell><TableHeaderCell>StorageClass</TableHeaderCell><TableHeaderCell>Reclaim policy</TableHeaderCell></TableRow></TableHeader><TableBody>{storageData?.pvs?.map((item: any) => <TableRow key={item.name}><TableCell><strong>{item.name}</strong><div style={{ fontSize: '0.75rem', opacity: 0.62 }}>{item.access_modes.join(', ')}</div></TableCell><TableCell><Badge color={item.status === 'Bound' ? 'success' : item.status === 'Available' ? 'informative' : 'warning'}>{item.status}</Badge></TableCell><TableCell>{item.capacity}</TableCell><TableCell>{item.claim}</TableCell><TableCell>{item.storage_class}</TableCell><TableCell>{item.reclaim_policy}</TableCell></TableRow>)}</TableBody></Table></div>}
+                  {storageSection === 'classes' && <div className={styles.tableCard}><Table><TableHeader><TableRow><TableHeaderCell>StorageClass</TableHeaderCell><TableHeaderCell>Provisioner</TableHeaderCell><TableHeaderCell>Binding mode</TableHeaderCell><TableHeaderCell>Reclaim policy</TableHeaderCell><TableHeaderCell>Expansion</TableHeaderCell></TableRow></TableHeader><TableBody>{storageData?.storage_classes?.map((item: any) => <TableRow key={item.name}><TableCell><strong>{item.name}</strong>{item.default && <Badge color="brand" appearance="tint" style={{ marginLeft: '7px' }}>Default</Badge>}</TableCell><TableCell><code>{item.provisioner}</code></TableCell><TableCell>{item.binding_mode}</TableCell><TableCell>{item.reclaim_policy}</TableCell><TableCell><Badge color={item.allow_expansion ? 'success' : 'subtle'}>{item.allow_expansion ? 'Allowed' : 'Not allowed'}</Badge></TableCell></TableRow>)}</TableBody></Table></div>}
+                  {storageSection === 'attachments' && <div className={styles.tableCard}><Table><TableHeader><TableRow><TableHeaderCell>VolumeAttachment</TableHeaderCell><TableHeaderCell>PersistentVolume</TableHeaderCell><TableHeaderCell>Node</TableHeaderCell><TableHeaderCell>State</TableHeaderCell><TableHeaderCell>Issue</TableHeaderCell></TableRow></TableHeader><TableBody>{storageData?.attachments?.map((item: any) => <TableRow key={item.name}><TableCell><strong>{item.name}</strong></TableCell><TableCell>{item.pv}</TableCell><TableCell>{item.node}</TableCell><TableCell><Badge color={item.attached ? 'success' : 'warning'}>{item.attached ? 'Attached' : 'Detached'}</Badge></TableCell><TableCell>{item.attach_error || '—'}</TableCell></TableRow>)}</TableBody></Table></div>}
+                  {storageSection === 'snapshots' && <div className={styles.tableCard}><Table><TableHeader><TableRow><TableHeaderCell>VolumeSnapshot</TableHeaderCell><TableHeaderCell>Source PVC</TableHeaderCell><TableHeaderCell>Size</TableHeaderCell><TableHeaderCell>Ready</TableHeaderCell><TableHeaderCell>Created</TableHeaderCell></TableRow></TableHeader><TableBody>{storageData?.snapshots?.map((item: any) => <TableRow key={`${item.namespace}/${item.name}`}><TableCell><strong>{item.namespace}/{item.name}</strong></TableCell><TableCell>{item.source_pvc}</TableCell><TableCell>{item.size}</TableCell><TableCell><Badge color={item.ready ? 'success' : 'warning'}>{item.ready ? 'Ready' : 'Pending'}</Badge></TableCell><TableCell>{item.created_at ? new Date(item.created_at).toLocaleString() : '—'}</TableCell></TableRow>)}{!storageData?.snapshots?.length && <TableRow><TableCell colSpan={5} style={{ padding: '28px', opacity: 0.65 }}>No VolumeSnapshots found, or the Kubernetes snapshot API is not installed.</TableCell></TableRow>}</TableBody></Table></div>}
+                </div>
+            ) : activeView === 'network' ? (
+                <div style={{ display: 'grid', gap: '16px' }}>
+                  <div className={styles.overviewGrid}>{[['Services', networkData?.services?.length], ['Ingresses', networkData?.ingresses?.length], ['NetworkPolicies', networkData?.policies?.length], ['Endpoints', networkData?.endpoints?.length]].map(([label, count]) => <Card key={label as string} className={styles.metricCard}><Title3>{label}</Title3><div style={{ fontSize: '2rem', fontWeight: 700 }}>{count ?? 0}</div></Card>)}</div>
+                  <TabList selectedValue={networkSection} onTabSelect={(_, data) => setNetworkSection(data.value as typeof networkSection)}>
+                    <Tab value="services">Services</Tab><Tab value="ingresses">Ingresses</Tab><Tab value="policies">Network Policies</Tab><Tab value="endpoints">Endpoints</Tab><Tab value="diagnostics">DNS & tests</Tab>
+                  </TabList>
+                  {networkSection === 'services' && <div className={styles.tableCard}><Table><TableHeader><TableRow><TableHeaderCell>Service</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell><TableHeaderCell>Cluster IP</TableHeaderCell><TableHeaderCell>Ports</TableHeaderCell><TableHeaderCell>Ready endpoints</TableHeaderCell></TableRow></TableHeader><TableBody>{networkData?.services?.map((service: any) => <TableRow key={`${service.namespace}/${service.name}`}><TableCell><strong>{service.namespace}/{service.name}</strong></TableCell><TableCell><Badge appearance="tint">{service.type}</Badge></TableCell><TableCell><code>{service.cluster_ip || '—'}</code></TableCell><TableCell>{service.ports.join(', ') || '—'}</TableCell><TableCell><Badge color={service.ready_endpoints ? 'success' : 'warning'}>{service.ready_endpoints}</Badge></TableCell></TableRow>)}</TableBody></Table></div>}
+                  {networkSection === 'ingresses' && <div className={styles.tableCard}><Table><TableHeader><TableRow><TableHeaderCell>Ingress</TableHeaderCell><TableHeaderCell>Class</TableHeaderCell><TableHeaderCell>Hosts</TableHeaderCell></TableRow></TableHeader><TableBody>{networkData?.ingresses?.map((item: any) => <TableRow key={`${item.namespace}/${item.name}`}><TableCell><strong>{item.namespace}/{item.name}</strong></TableCell><TableCell>{item.class || 'Default'}</TableCell><TableCell>{item.hosts.join(', ') || 'No hosts configured'}</TableCell></TableRow>)}</TableBody></Table></div>}
+                  {networkSection === 'policies' && <div className={styles.tableCard}><Table><TableHeader><TableRow><TableHeaderCell>NetworkPolicy</TableHeaderCell><TableHeaderCell>Pod selector</TableHeaderCell><TableHeaderCell>Policy types</TableHeaderCell><TableHeaderCell>Rules</TableHeaderCell></TableRow></TableHeader><TableBody>{networkData?.policies?.map((item: any) => <TableRow key={`${item.namespace}/${item.name}`}><TableCell><strong>{item.namespace}/{item.name}</strong></TableCell><TableCell><code>{Object.entries(item.pod_selector || {}).map(([key, value]) => `${key}=${value}`).join(', ') || 'All pods'}</code></TableCell><TableCell>{item.policy_types.join(', ') || 'Ingress'}</TableCell><TableCell>{item.ingress_rules} ingress · {item.egress_rules} egress</TableCell></TableRow>)}</TableBody></Table></div>}
+                  {networkSection === 'endpoints' && <div className={styles.tableCard}><Table><TableHeader><TableRow><TableHeaderCell>Endpoint</TableHeaderCell><TableHeaderCell>Ready addresses</TableHeaderCell><TableHeaderCell>Not ready</TableHeaderCell><TableHeaderCell>Ports</TableHeaderCell></TableRow></TableHeader><TableBody>{networkData?.endpoints?.map((item: any) => <TableRow key={`${item.namespace}/${item.name}`}><TableCell><strong>{item.namespace}/{item.name}</strong></TableCell><TableCell>{item.addresses.join(', ') || '—'}</TableCell><TableCell>{item.not_ready_addresses.join(', ') || '—'}</TableCell><TableCell>{item.ports.join(', ') || '—'}</TableCell></TableRow>)}</TableBody></Table></div>}
+                  {networkSection === 'diagnostics' && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '16px', width: '100%' }}>
+                    <Card className={styles.tableCard} style={{ gridColumn: '1 / -1', width: '100%' }}><div style={{ padding: '16px 18px', display: 'flex', alignItems: 'center', gap: '18px', flexWrap: 'wrap' }}><div style={{ display: 'grid', gap: '5px', width: '280px' }}><Label>Probe source node</Label><Dropdown value={networkProbeNode || 'Any schedulable node'} selectedOptions={[networkProbeNode || '']} onOptionSelect={(_, data) => setNetworkProbeNode(data.optionValue || '')}><Option value="">Any schedulable node</Option>{(networkData?.nodes || []).map((node: string) => <Option key={node} value={node}>{node}</Option>)}</Dropdown></div><div style={{ minWidth: '260px', flex: 1 }}><strong style={{ fontSize: '0.85rem' }}>Run from inside the cluster</strong><div style={{ fontSize: '0.78rem', opacity: 0.68, marginTop: '4px' }}>A temporary Alpine Pod runs on the selected node and is removed after the result is collected.</div></div></div></Card>
+                    <Card className={styles.tableCard} style={{ width: '100%', minWidth: 0 }}><div style={{ padding: '20px', display: 'grid', gap: '14px', minHeight: '260px', alignContent: 'start' }}><div><Title3>DNS resolution</Title3><div style={{ fontSize: '0.8rem', opacity: 0.68, marginTop: '5px' }}>Resolve a Service DNS name from the probe Pod.</div></div><Input value={dnsHost} onChange={(_, data) => setDnsHost(data.value)} placeholder="service.namespace.svc" /><Button appearance="primary" onClick={runDnsCheck} disabled={isRunningDnsCheck || !dnsHost.trim()}>{isRunningDnsCheck ? 'Checking…' : 'Resolve DNS'}</Button>{dnsResult && <div style={{ fontSize: '0.82rem', padding: '12px', borderRadius: '8px', background: dnsResult.reachable ? 'rgba(44,197,126,0.1)' : 'rgba(255,77,99,0.1)' }}><Badge color={dnsResult.reachable ? 'success' : 'danger'}>{dnsResult.reachable ? 'Resolved' : 'Resolution failed'}</Badge>{dnsResult.node && <span style={{ marginLeft: '8px', opacity: 0.75 }}>Source: {dnsResult.node}</span>}<pre style={{ margin: '10px 0 0', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontFamily: 'var(--fontFamilyMonospace)', fontSize: '0.76rem' }}>{dnsResult.output || dnsResult.error}</pre></div>}</div></Card>
+                    <Card className={styles.tableCard} style={{ width: '100%', minWidth: 0 }}><div style={{ padding: '20px', display: 'grid', gap: '14px', minHeight: '260px', alignContent: 'start' }}><div><Title3>TCP connectivity</Title3><div style={{ fontSize: '0.8rem', opacity: 0.68, marginTop: '5px' }}>Test a Service, endpoint, or external host from the probe Pod.</div></div><div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 110px', gap: '8px' }}><Input value={connectionHost} onChange={(_, data) => setConnectionHost(data.value)} placeholder="Service DNS or endpoint IP" /><Input type="number" value={connectionPort} onChange={(_, data) => setConnectionPort(data.value)} min="1" max="65535" /></div><Button appearance="primary" onClick={runConnectionTest} disabled={isRunningConnectionCheck || !connectionHost.trim() || !connectionPort}>{isRunningConnectionCheck ? 'Testing…' : 'Test connection'}</Button>{connectionResult && <div style={{ fontSize: '0.82rem', padding: '12px', borderRadius: '8px', background: connectionResult.reachable ? 'rgba(44,197,126,0.1)' : 'rgba(255,77,99,0.1)' }}><Badge color={connectionResult.reachable ? 'success' : 'danger'}>{connectionResult.reachable ? 'Reachable' : 'Unavailable'}</Badge><span style={{ marginLeft: '8px', opacity: 0.75 }}>{connectionResult.node ? `Source: ${connectionResult.node} · ` : ''}{connectionResult.latency_ms != null ? `${connectionResult.latency_ms} ms` : ''}</span><pre style={{ margin: '10px 0 0', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontFamily: 'var(--fontFamilyMonospace)', fontSize: '0.76rem' }}>{connectionResult.output || connectionResult.error}</pre></div>}</div></Card>
+                  </div>}
+                </div>
+            ) : activeView === 'rbac' ? (
+                <div style={{ display: 'grid', gap: '16px' }}>
+                  {rbacServiceAccountAccess && <Dialog open onOpenChange={(_, data) => !data.open && setRbacServiceAccountAccess(null)}><DialogSurface style={{ width: 'min(880px, calc(100vw - 32px))', maxWidth: '880px' }}><DialogBody><DialogTitle>ServiceAccount access</DialogTitle><DialogContent><div style={{ display: 'grid', gap: '12px' }}><strong>{rbacServiceAccountAccess.service_account}</strong>{(rbacServiceAccountAccess.bindings || []).map((binding: any) => { const verbs = ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete']; const resources: string[] = [...new Set<string>(binding.rules.flatMap((rule: any): string[] => rule.resources?.length ? rule.resources : ['*']))]; const allows = (resource: string, verb: string) => binding.rules.some((rule: any) => (rule.resources?.includes(resource) || rule.resources?.includes('*')) && (rule.verbs?.includes(verb) || rule.verbs?.includes('*'))); return <Card key={binding.binding}><div style={{ padding: '12px' }}><div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}><div><strong>{binding.binding}</strong> → <Badge appearance="tint">{binding.role}</Badge></div><span style={{ fontSize: '0.76rem', opacity: 0.65 }}>{binding.cluster_scoped ? 'Cluster binding' : binding.namespace || 'Namespaced binding'}</span></div><Table size="extra-small"><TableHeader><TableRow><TableHeaderCell>Resource</TableHeaderCell>{verbs.map(verb => <TableHeaderCell key={verb} style={{ textTransform: 'capitalize', textAlign: 'center' }}>{verb}</TableHeaderCell>)}</TableRow></TableHeader><TableBody>{resources.map(resource => <TableRow key={resource}><TableCell><code>{resource}</code></TableCell>{verbs.map(verb => <TableCell key={verb} style={{ textAlign: 'center' }}><Checkbox checked={allows(resource, verb)} disabled aria-label={`${verb} ${resource}`} /></TableCell>)}</TableRow>)}</TableBody></Table></div></Card>; })}{!rbacServiceAccountAccess.bindings?.length && <span style={{ opacity: 0.65 }}>No role bindings grant this ServiceAccount access.</span>}</div></DialogContent><DialogActions><Button onClick={() => setRbacServiceAccountAccess(null)}>Close</Button></DialogActions></DialogBody></DialogSurface></Dialog>}
+                  {rbacBindingEditor && <Dialog open onOpenChange={(_, data) => !data.open && setRbacBindingEditor(null)}><DialogSurface style={{ width: 'min(700px, calc(100vw - 32px))', maxWidth: '700px' }}><DialogBody><DialogTitle>Edit Role Binding</DialogTitle><DialogContent><div style={{ display: 'grid', gap: '18px' }}><div style={{ padding: '10px 12px', borderRadius: '8px', background: 'rgba(255,255,255,0.035)', fontSize: '0.82rem' }}><strong>{rbacBindingEditor.namespace ? `${rbacBindingEditor.namespace}/` : 'Cluster-wide / '}{rbacBindingEditor.name}</strong><span style={{ opacity: 0.65 }}> · changes apply immediately</span></div><div style={{ display: 'grid', gridTemplateColumns: '0.8fr 1.2fr', gap: '12px' }}><div style={{ display: 'grid', gap: '5px' }}><Label>Role type</Label><Dropdown value={rbacBindingEditor.roleKind} selectedOptions={[rbacBindingEditor.roleKind]} onOptionSelect={(_, data) => setRbacBindingEditor({ ...rbacBindingEditor, roleKind: data.optionValue, roleName: '' })}><Option value="Role">Role</Option><Option value="ClusterRole">ClusterRole</Option></Dropdown></div><div style={{ display: 'grid', gap: '5px' }}><Label>Granted role</Label><Dropdown value={rbacBindingEditor.roleName} selectedOptions={[rbacBindingEditor.roleName]} onOptionSelect={(_, data) => setRbacBindingEditor({ ...rbacBindingEditor, roleName: data.optionValue })}>{(rbacBindingEditor.roleKind === 'ClusterRole' ? (rbacData?.cluster_roles || []) : (rbacData?.roles || []).filter((role: any) => role.namespace === rbacBindingEditor.namespace)).map((role: any) => <Option key={role.name} value={role.name}>{role.name}</Option>)}</Dropdown></div></div><div style={{ display: 'grid', gap: '8px' }}><div style={{ display: 'flex', justifyContent: 'space-between' }}><Label>Subjects</Label><span style={{ fontSize: '0.76rem', opacity: 0.65 }}>{rbacBindingEditor.subjects?.length || 0} assigned</span></div><div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', padding: '10px', minHeight: '42px', border: '1px solid var(--colorNeutralStroke1)', borderRadius: '8px' }}>{rbacBindingEditor.subjects?.map((subject: any, index: number) => <Badge key={`${subject.kind}-${subject.name}-${index}`} appearance="tint">{subject.kind}: {subject.name}{subject.namespace ? ` · ${subject.namespace}` : ''}<Button size="small" appearance="transparent" style={{ minWidth: '20px', marginLeft: '3px' }} onClick={() => setRbacBindingEditor({ ...rbacBindingEditor, subjects: rbacBindingEditor.subjects.filter((_: any, subjectIndex: number) => subjectIndex !== index) })}>×</Button></Badge>)}{!rbacBindingEditor.subjects?.length && <span style={{ opacity: 0.55, fontSize: '0.82rem' }}>No subjects assigned</span>}</div><div style={{ display: 'grid', gridTemplateColumns: '130px minmax(0, 1fr) 150px auto', gap: '8px' }}><Dropdown value={rbacSubjectDraft.kind} selectedOptions={[rbacSubjectDraft.kind]} onOptionSelect={(_, data) => setRbacSubjectDraft({ ...rbacSubjectDraft, kind: data.optionValue || 'ServiceAccount' })}><Option value="ServiceAccount">ServiceAccount</Option><Option value="User">User</Option><Option value="Group">Group</Option></Dropdown><Input placeholder="Name" value={rbacSubjectDraft.name} onChange={(_, data) => setRbacSubjectDraft({ ...rbacSubjectDraft, name: data.value })} /><Input placeholder="Namespace" value={rbacSubjectDraft.namespace} disabled={rbacSubjectDraft.kind !== 'ServiceAccount'} onChange={(_, data) => setRbacSubjectDraft({ ...rbacSubjectDraft, namespace: data.value })} /><Button appearance="secondary" disabled={!rbacSubjectDraft.name.trim()} onClick={() => { setRbacBindingEditor({ ...rbacBindingEditor, subjects: [...(rbacBindingEditor.subjects || []), { kind: rbacSubjectDraft.kind, name: rbacSubjectDraft.name.trim(), ...(rbacSubjectDraft.kind === 'ServiceAccount' && rbacSubjectDraft.namespace.trim() ? { namespace: rbacSubjectDraft.namespace.trim() } : {}) }] }); setRbacSubjectDraft({ kind: 'ServiceAccount', name: '', namespace: rbacBindingEditor.namespace || '' }); }}>Add</Button></div></div></div></DialogContent><DialogActions><Button appearance="subtle" onClick={() => setRbacBindingEditor(null)}>Cancel</Button><Button appearance="primary" onClick={saveRbacBinding} disabled={!rbacBindingEditor.roleName || !rbacBindingEditor.subjects?.length}>Save binding</Button></DialogActions></DialogBody></DialogSurface></Dialog>}
+                  {rbacData?.permission_errors?.length > 0 && <Card style={{ backgroundColor: 'rgba(255, 77, 99, 0.08)', border: '1px solid rgba(255, 77, 99, 0.3)' }}><div style={{ padding: '14px' }}><Title3>Permission errors</Title3>{rbacData.permission_errors.map((error: any, index: number) => <div key={index} style={{ marginTop: '8px', fontSize: '0.82rem' }}><strong>{error.area}:</strong> {error.message}</div>)}</div></Card>}
+                  {(() => { const highRisk = (rbacData?.effective_rules || []).filter((rule: any) => rule.verbs?.includes('*') || rule.resources?.includes('*') || (rule.resources || []).some((resource: string) => ['secrets', 'roles', 'rolebindings', 'clusterroles', 'clusterrolebindings'].includes(resource)) && (rule.verbs || []).some((verb: string) => ['create', 'update', 'patch', 'delete', '*'].includes(verb))); return <Card style={{ backgroundColor: highRisk.length ? 'rgba(255, 153, 0, 0.09)' : 'rgba(44, 197, 126, 0.07)', border: `1px solid ${highRisk.length ? 'rgba(255,153,0,0.3)' : 'rgba(44,197,126,0.24)'}` }}><div style={{ padding: '14px', display: 'flex', justifyContent: 'space-between', gap: '14px', alignItems: 'center' }}><div><Title3>{highRisk.length ? 'Elevated permissions detected' : 'No broad permission rules detected'}</Title3><div style={{ fontSize: '0.82rem', opacity: 0.72, marginTop: '4px' }}>{highRisk.length ? `${highRisk.length} effective rule${highRisk.length === 1 ? '' : 's'} can modify sensitive resources or grant broad access.` : 'The current identity has no wildcard or sensitive-resource write rules in this namespace review.'}</div></div><Badge color={highRisk.length ? 'warning' : 'success'} appearance="tint">{highRisk.length ? 'Review access' : 'Lower risk'}</Badge></div></Card>; })()}
+                  <div className={styles.overviewGrid}>
+                    <Card className={styles.metricCard}><Title3>Effective access</Title3><div style={{ fontSize: '0.8rem', opacity: 0.65 }}>SelfSubjectRulesReview in {rbacData?.namespace || 'default'}</div><div style={{ marginTop: '10px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>{rbacData?.effective_rules?.slice(0, 18).map((rule: any, index: number) => <Badge key={index} appearance="tint" color="brand">{rule.verbs.join(', ')} · {(rule.resources || ['*']).join(', ')}</Badge>)}{!rbacData?.effective_rules?.length && <span style={{ opacity: 0.6 }}>No rules returned or access denied.</span>}</div></Card>
+                    <Card className={styles.metricCard}><Title3>RBAC inventory</Title3><div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginTop: '10px' }}>{[['Service Accounts', rbacData?.service_accounts?.length], ['Roles', rbacData?.roles?.length], ['Cluster Roles', rbacData?.cluster_roles?.length], ['Bindings', (rbacData?.bindings?.length || 0) + (rbacData?.cluster_bindings?.length || 0)]].map(([label, count]) => <div key={label as string} style={{ padding: '10px', background: 'rgba(255,255,255,0.035)', borderRadius: '8px' }}><div style={{ fontSize: '1.25rem', fontWeight: 700 }}>{count ?? 0}</div><div style={{ fontSize: '0.75rem', opacity: 0.65 }}>{label}</div></div>)}</div></Card>
+                  </div>
+                  <div className={styles.tableCard}><div style={{ padding: '14px' }}><div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><Title3>Service Accounts</Title3><Button size="small" appearance="secondary" icon={<Add20Regular />} onClick={createRbacServiceAccount}>Create</Button></div><div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '10px' }}>{rbacData?.service_accounts?.slice(0, 32).map((item: any) => <Button key={`${item.namespace}/${item.name}`} size="small" appearance="secondary" onClick={() => showServiceAccountAccess(item)}>{item.namespace}/{item.name}</Button>)}</div></div></div>
+                  <div className={styles.tableCard}><div style={{ padding: '14px' }}><Title3>Role bindings</Title3><div style={{ fontSize: '0.78rem', opacity: 0.65, margin: '4px 0 8px' }}>Edit changes the bound role and subjects; removing a binding immediately revokes its access.</div>{[...(rbacData?.bindings || []), ...(rbacData?.cluster_bindings || [])].map((item: any) => <div key={`${item.namespace || 'cluster'}/${item.name}`} style={{ padding: '10px 0', borderBottom: '1px solid var(--colorNeutralStroke2)', fontSize: '0.82rem', display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'center' }}><div><strong>{item.namespace ? `${item.namespace}/` : ''}{item.name}</strong> → <Badge appearance="tint">{item.role}</Badge><div style={{ opacity: 0.62, marginTop: '3px' }}>{item.subjects.join(', ') || 'No subjects'}</div></div><div style={{ display: 'flex', gap: '4px' }}><Button size="small" appearance="secondary" onClick={() => { setRbacSubjectDraft({ kind: 'ServiceAccount', name: '', namespace: item.namespace || '' }); setRbacBindingEditor({ ...item, cluster: !item.namespace, roleKind: item.role.split('/')[0], roleName: item.role.split('/')[1], subjects: item.subjects.map((subject: string) => { const [kind, name] = subject.split(':'); return { kind, name, ...(kind === 'ServiceAccount' && item.namespace ? { namespace: item.namespace } : {}) }; }) }); }}>Edit</Button><Button size="small" appearance="subtle" style={{ color: 'var(--colorPaletteRedForeground1)' }} onClick={() => deleteRbacBinding(item, !item.namespace)}>Remove</Button></div></div>)}</div></div>
+                </div>
             ) : activeView === 'overview' ? (
                 <div className={styles.overviewGrid}>
                     <div className={styles.metricCard}>
@@ -2227,7 +3162,7 @@ export const Dashboard = ({ context: initialContext }: { context: string }) => {
                       context={context} 
                       namespace={p.namespace} 
                       name={p.name} 
-                      resourceType={activeView === 'pods' ? 'pods' : 'deployments'} 
+                      resourceType={p.resourceType || 'pods'}
                     />
                   ) : (
                     <ShellTerminal

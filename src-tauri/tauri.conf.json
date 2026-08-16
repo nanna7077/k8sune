@@ -5,9 +5,12 @@
   "identifier": "com.nannan.k8sune",
   "build": {
     "frontendDist": "../frontend/dist",
-    "devUrl": "http://localhost:5173",
+    "devUrl": "http://127.0.0.1:5173",
     "beforeDevCommand": "npm run dev --prefix frontend",
-    "beforeBuildCommand": "npm run build --prefix frontend"
+    "beforeBuildCommand": "npm run build --prefix frontend",
+    "additionalWatchFolders": [
+      "../backend"
+    ]
   },
   "app": {
     "windows": [
@@ -20,7 +23,8 @@
         "minimizable": true,
         "closable": true,
         "fullscreen": false,
-        "decorations": false
+        "decorations": false,
+        "backgroundColor": "#0b0c10"
       }
     ],
     "security": {
@@ -40,7 +44,6 @@
       "../backend/cluster/**/*",
       "../backend/models/**/*",
       "../backend/utils/**/*",
-      "../backend/libs/**/*",
       "../backend/main.py"
     ]
   }

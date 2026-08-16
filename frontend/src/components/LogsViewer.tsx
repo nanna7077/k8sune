@@ -7,6 +7,7 @@ import {
 } from "@fluentui/react-components";
 import { ArrowDownload20Regular } from '@fluentui/react-icons';
 import { getBackendPort } from '../utils/api';
+import { useFeedbackDialog } from './FeedbackDialog';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeTextFile } from '@tauri-apps/plugin-fs';
 
@@ -75,20 +76,25 @@ const timeframes = [
 
 export const LogsViewer = ({ context, namespace, pod }: { context: string, namespace: string, pod: string }) => {
   const styles = useStyles();
+  const feedback = useFeedbackDialog();
   const [logs, setLogs] = useState<string[]>([]);
   const [timeframe, setTimeframe] = useState('0');
+  const [logSource, setLogSource] = useState<'current' | 'previous'>('current');
   const logAreaRef = useRef<HTMLDivElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
 
-  const startStreaming = async (seconds: string) => {
+  const startStreaming = async (seconds: string, source: 'current' | 'previous') => {
     if (eventSourceRef.current) eventSourceRef.current.close();
     setLogs([]);
     
     const port = await getBackendPort();
-    let url = `http://127.0.0.1:${port}/api/logs/${context}/${namespace}/${pod}`;
+    const params = new URLSearchParams();
     if (seconds !== '0') {
-      url += `?since_seconds=${seconds}`;
+      params.set('since_seconds', seconds);
     }
+    if (source === 'previous') params.set('previous', 'true');
+    const query = params.toString();
+    const url = `http://127.0.0.1:${port}/api/logs/${context}/${namespace}/${pod}${query ? `?${query}` : ''}`;
     
     const es = new EventSource(url);
     es.onmessage = (event) => {
@@ -102,11 +108,11 @@ export const LogsViewer = ({ context, namespace, pod }: { context: string, names
   };
 
   useEffect(() => {
-    startStreaming(timeframe);
+    startStreaming(timeframe, logSource);
     return () => {
       if (eventSourceRef.current) eventSourceRef.current.close();
     };
-  }, [context, namespace, pod, timeframe]);
+  }, [context, namespace, pod, timeframe, logSource]);
 
   useEffect(() => {
     if (logAreaRef.current) {
@@ -125,12 +131,13 @@ export const LogsViewer = ({ context, namespace, pod }: { context: string, names
         await writeTextFile(filePath, logs.join('\n'));
       }
     } catch (e) {
-      alert(`Failed to save logs: ${e}`);
+      feedback.notice('Could not save logs', String(e), 'error');
     }
   };
 
   return (
     <div className={styles.container}>
+      {feedback.dialog}
       <div className={styles.header}>
         <div className={styles.titleGroup}>
           <div className={styles.title}>Logs: {pod}</div>
@@ -138,6 +145,13 @@ export const LogsViewer = ({ context, namespace, pod }: { context: string, names
         </div>
         
         <div className={styles.controls}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span style={{ fontSize: '0.75rem', opacity: 0.6 }}>Source:</span>
+            <Select size="small" value={logSource} onChange={(e) => setLogSource(e.target.value as 'current' | 'previous')}>
+              <option value="current">Current container</option>
+              <option value="previous">Previous container</option>
+            </Select>
+          </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <span style={{ fontSize: '0.75rem', opacity: 0.6 }}>Time:</span>
             <Select 
@@ -163,7 +177,7 @@ export const LogsViewer = ({ context, namespace, pod }: { context: string, names
         </div>
       </div>
       <div className={styles.logArea} ref={logAreaRef}>
-        {logs.length === 0 ? <div style={{ opacity: 0.4 }}>Waiting for logs...</div> : logs.map((log, i) => (
+        {logs.length === 0 ? <div style={{ opacity: 0.4 }}>{logSource === 'previous' ? 'Loading previous container logs...' : 'Waiting for logs...'}</div> : logs.map((log, i) => (
           <div key={i}>{log}</div>
         ))}
       </div>
