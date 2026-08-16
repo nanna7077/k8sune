@@ -19,5 +19,11 @@ export default defineConfig([
       ecmaVersion: 2020,
       globals: globals.browser,
     },
+    rules: {
+      // Retain the project's existing hook-rule baseline while upgrading the
+      // plugin for ESLint 10 compatibility. This rule is newly enabled by the
+      // plugin and will be adopted separately with the necessary refactors.
+      'react-hooks/set-state-in-effect': 'off',
+    },
   },
 ])
