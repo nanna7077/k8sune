@@ -92,33 +92,53 @@ pub fn run() {
       }
 
       // `cargo tauri dev` runs from target/debug, whereas production bundles
-      // backend resources beside the executable. Resolve each location explicitly.
+      // the complete backend directory in the app resource directory.
       #[cfg(debug_assertions)]
       let backend_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../backend");
 
       #[cfg(not(debug_assertions))]
       let backend_dir = {
-          let current_exe = std::env::current_exe().unwrap_or_default();
-          let exe_dir = current_exe.parent().unwrap_or(&current_exe);
-          let backend_next_to_exe = exe_dir.join("backend");
+          let resource_dir = app.path().resource_dir()?;
+          let bundled_backend = resource_dir.join("backend");
+          let executable_backend = std::env::current_exe()?
+              .parent()
+              .map(|dir| dir.join("backend"));
 
-          if backend_next_to_exe.exists() {
-              backend_next_to_exe
+          // The Homebrew formula ships `backend` beside the binary. Native macOS
+          // bundles ship it in `Contents/Resources/backend`.
+          if let Some(path) = executable_backend.filter(|path| path.join("main.py").is_file()) {
+              path
+          } else if bundled_backend.join("main.py").is_file() {
+              bundled_backend
           } else {
-              app.path()
-                  .resolve("backend", tauri::path::BaseDirectory::Resource)
-                  .unwrap_or_default()
+              return Err(std::io::Error::new(
+                  std::io::ErrorKind::NotFound,
+                  format!(
+                      "Backend was not found beside the executable or at {}. Rebuild the application so the backend directory is included in Resources.",
+                      bundled_backend.display(),
+                  ),
+              ).into());
           }
       };
+
+      if !backend_dir.join("main.py").is_file() {
+          return Err(std::io::Error::new(
+              std::io::ErrorKind::NotFound,
+              format!("Backend entrypoint was not found at {}", backend_dir.join("main.py").display()),
+          ).into());
+      }
       let project_root = backend_dir.parent().unwrap_or(&backend_dir).to_path_buf();
 
       tauri::async_runtime::spawn(async move {
           let python_path = resolve_python_path(&backend_dir);
           let main_path = backend_dir.join("main.py");
-          let pythonpath = project_root;
+          let pythonpath = project_root.clone();
 
           let mut cmd = Command::new(python_path);
-          cmd.arg(main_path);
+          cmd.arg(&main_path);
+          // Never inherit Finder's or the shell's current directory. Python imports
+          // and any relative backend assets must resolve from the bundled resources.
+          cmd.current_dir(&project_root);
           cmd.env("PYTHONPATH", pythonpath);
           
           // Augment PATH for the backend subprocess so that it can find kubectl, python, etc.
