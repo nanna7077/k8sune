@@ -6,64 +6,23 @@
   <img src="sprites/k8sune-run.png" width="280" alt="k8sune mascot running">
 </p>
 
-## What it does
+## Features
 
-### Cluster and resource workspace
-
-- Browse cluster overview, nodes, namespaces, Pods, Deployments, StatefulSets, DaemonSets, CronJobs, ConfigMaps, Secrets, PersistentVolumes, and PersistentVolumeClaims.
-- Browse Services, Ingresses, ReplicaSets, Jobs, and discovered Custom Resource Definitions.
-- Open resource detail pages with metadata, status, related Pods, replica and restart information, and resource-specific controls.
-- Open resources, list views, logs, and YAML editors in separate windows when a focused workspace is useful.
-- Search navigation, available actions, contexts, and resources loaded in the current view through the command palette (`Ctrl/Cmd + Shift + P`).
-
-### Workload investigation
-
-- Follow related Kubernetes events through a visual timeline and ordered event-history table.
-- Stream Pod logs with selectable time ranges; switch to previous-container logs and download captured output.
-- Open an interactive container shell when the cluster API server and your RBAC permissions permit exec access.
-- View and edit resource YAML with a Monaco editor, reload from the cluster, compare a diff, and apply the change.
-- Use OpenAPI schema guidance while editing Custom Resources when the cluster exposes a schema.
-
-### Create and update resources
-
-- Create Deployments, StatefulSets, DaemonSets, CronJobs, ConfigMaps, Secrets, and PersistentVolumeClaims with resource-specific forms.
-- Configure workload image, command, environment variables, replicas, schedule, service account, node selector, resource requests, and resource limits before generating YAML.
-- Create Opaque, service-account-token, TLS, Docker registry, basic-auth, and SSH-auth Secrets.
-- Review and edit generated YAML before applying it, or apply a generic YAML manifest with an optional namespace scope.
-
-### Safer operations
-
-- Review a resource-specific impact warning before deletion.
-- Run a server-side delete dry-run to check Kubernetes authorization and admission without removing the resource.
-- Require the exact resource name as typed confirmation before permanent deletion.
-- Preview YAML changes in a diff editor before applying updates.
-
-### Context and kubeconfig management
-
-- Import kubeconfig content from any selected file or pasted YAML.
-- Inspect configured contexts, cluster server details, default namespace, and user details.
-- Switch contexts, edit context metadata, favorite frequently used contexts, and remove contexts while retaining shared kubeconfig entries when appropriate.
-
-### Network diagnostics
-
-- Inspect Services, Ingresses, NetworkPolicies, and Endpoints.
-- Run DNS resolution through cluster DNS from a short-lived Alpine probe Pod.
-- Run TCP connectivity tests from inside the cluster, optionally pinning the probe Pod to a selected node.
-- Remove diagnostic probe Pods after the result is collected.
-
-### Access, storage, and releases
-
-- Inspect RBAC inventory, effective access for the active identity, elevated permissions, ServiceAccount access paths, Roles, ClusterRoles, RoleBindings, and ClusterRoleBindings.
-- Create ServiceAccounts and edit or remove supported RoleBindings and ClusterRoleBindings.
-- Review PVC/PV status, requested and provisioned capacity, StorageClasses, workload consumers, VolumeAttachments, VolumeSnapshots, topology, and storage risk callouts.
-- Browse Helm releases, history, values, values diffs, manifests, and roll back to a previous revision.
-
-### Operator utilities
-
-- Start port forwards for supported resources; inspect active sessions, copy local URLs, reconnect, stop one session, or stop all sessions.
-- Run a command in temporary Alpine runner Pods across selected nodes or a node-label selector.
-- Set a 5–300 second node-command timeout, inspect per-node output and status, then copy or download results as CSV.
-- Automatically clean up temporary node runner Pods after collection.
+- Browse cluster, namespace, workload, configuration, storage, network, RBAC, Helm, and Custom Resource state.
+- Search navigation, actions, contexts, and loaded resources with the `Ctrl/Cmd + Shift + P` command palette.
+- Inspect resource details, related Pods, restart counts, event timelines, ordered event history, current logs, and previous-container logs.
+- Open interactive container shells when the cluster API server and your RBAC permissions allow exec access.
+- Create Deployments, StatefulSets, DaemonSets, CronJobs, ConfigMaps, Secrets, and PVCs with resource-specific forms and generated YAML.
+- Apply generic YAML manifests; edit resource YAML, compare a diff, and use CRD OpenAPI schema guidance when available.
+- Protect deletions with impact warnings, server-side dry-runs, and typed confirmation.
+- Import, edit, favorite, switch, and remove kubeconfig contexts.
+- Inspect Services, Ingresses, NetworkPolicies, and Endpoints; run DNS and TCP tests from temporary in-cluster probe Pods, optionally pinned to a node.
+- Inspect effective RBAC access and ServiceAccount bindings; create ServiceAccounts and manage RoleBindings and ClusterRoleBindings.
+- Review PVC/PV health, StorageClasses, workload consumers, VolumeAttachments, VolumeSnapshots, topology, and storage warnings.
+- Browse Helm releases, revision history, values diffs, manifests, and roll back releases.
+- Manage port forwards: start, copy URL, reconnect, stop, and stop all active sessions.
+- Run commands across selected nodes or a label selector with timeouts, per-node output, automatic cleanup, and CSV export.
+- Open resources, list views, logs, YAML editors, and node execution in separate windows.
 
 ## Install
 
@@ -108,7 +67,6 @@ It synchronizes mascot sprites, installs JavaScript and Python dependencies, and
 - **Desktop:** [Tauri v2](https://v2.tauri.app/) and Rust manage the application windows and start the local backend.
 - **Frontend:** React, TypeScript, Fluent UI, and Monaco provide the cluster workspace.
 - **Backend:** FastAPI with `kubernetes_asyncio` performs Kubernetes API operations against the selected context.
-- **Landing page:** the static GitHub Pages site is in [`docs/`](docs/index.html) and deploys through [`.github/workflows/pages.yml`](.github/workflows/pages.yml).
 
 ## License
 
