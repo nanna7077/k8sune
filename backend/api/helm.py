@@ -2,6 +2,7 @@ import asyncio
 import difflib
 import os
 import tempfile
+from urllib.parse import quote
 import yaml
 
 from fastapi import APIRouter, HTTPException
@@ -10,6 +11,65 @@ from pydantic import BaseModel, Field
 from backend.cluster.manager import cluster_manager
 
 router = APIRouter()
+
+
+def _clean_manifest(value):
+    """Remove server-managed fields so desired state can be compared meaningfully."""
+    if not isinstance(value, dict):
+        return value
+    cleaned = {key: _clean_manifest(item) for key, item in value.items() if key != 'status'}
+    metadata = cleaned.get('metadata')
+    if isinstance(metadata, dict):
+        metadata = dict(metadata)
+        for field in ('managedFields', 'resourceVersion', 'uid', 'creationTimestamp', 'generation', 'selfLink'):
+            metadata.pop(field, None)
+        annotations = metadata.get('annotations')
+        if isinstance(annotations, dict):
+            annotations = dict(annotations)
+            for field in ('kubectl.kubernetes.io/last-applied-configuration', 'deployment.kubernetes.io/revision'):
+                annotations.pop(field, None)
+            if annotations:
+                metadata['annotations'] = annotations
+            else:
+                metadata.pop('annotations', None)
+        cleaned['metadata'] = metadata
+    return cleaned
+
+
+def _manifest_objects(documents):
+    """Flatten Helm's multi-document output, including List resources."""
+    for document in documents:
+        if not isinstance(document, dict):
+            continue
+        if document.get('kind', '').endswith('List') and isinstance(document.get('items'), list):
+            yield from _manifest_objects(document['items'])
+        elif document.get('apiVersion') and document.get('kind') and document.get('metadata', {}).get('name'):
+            yield document
+
+
+async def _live_resource(api_client, desired):
+    api_version = desired['apiVersion']
+    kind = desired['kind']
+    metadata = desired['metadata']
+    if '/' in api_version:
+        group, version = api_version.split('/', 1)
+        base_path = f'/apis/{quote(group, safe=".")}/{quote(version, safe="")}'
+    else:
+        base_path = f'/api/{quote(api_version, safe="")}'
+    discovery = await api_client.call_api(base_path, 'GET', response_type='object', _return_http_data_only=True)
+    resources = discovery.get('resources', []) if isinstance(discovery, dict) else []
+    resource = next((item for item in resources if item.get('kind') == kind and '/' not in item.get('name', '')), None)
+    if not resource:
+        raise ValueError(f'{api_version} {kind} is not discoverable on this cluster')
+    namespace = metadata.get('namespace')
+    name = metadata['name']
+    if resource.get('namespaced'):
+        if not namespace:
+            raise ValueError(f'{kind}/{name} is namespaced but its manifest has no namespace')
+        path = f"{base_path}/namespaces/{quote(namespace, safe='')}/{resource['name']}/{quote(name, safe='')}"
+    else:
+        path = f"{base_path}/{resource['name']}/{quote(name, safe='')}"
+    return await api_client.call_api(path, 'GET', response_type='object', _return_http_data_only=True)
 
 
 async def helm(context: str, *args: str) -> str:
@@ -97,6 +157,47 @@ async def values_diff(context_name: str, namespace: str, name: str, from_revisio
     before = await helm(context_name, 'get', 'values', name, '--namespace', namespace, '--revision', str(from_revision), '--output', 'yaml')
     after = await helm(context_name, 'get', 'values', name, '--namespace', namespace, '--revision', str(to_revision), '--output', 'yaml')
     return {'diff': ''.join(difflib.unified_diff(before.splitlines(True), after.splitlines(True), fromfile=f'revision-{from_revision}', tofile=f'revision-{to_revision}'))}
+
+
+@router.get('/helm/{context_name}/releases/{namespace}/{name}/drift')
+async def resource_drift(context_name: str, namespace: str, name: str, revision: int = 0):
+    """Compare Helm's rendered release manifest with objects currently in the cluster."""
+    args = ['get', 'manifest', name, '--namespace', namespace]
+    if revision:
+        args.extend(['--revision', str(revision)])
+    rendered = await helm(context_name, *args)
+    try:
+        desired_objects = list(_manifest_objects(yaml.safe_load_all(rendered)))
+    except yaml.YAMLError as error:
+        raise HTTPException(status_code=400, detail=f'Helm returned invalid YAML: {error}')
+
+    api_client = await cluster_manager.get_client(context_name)
+    changes, missing, errors = [], [], []
+    unchanged = 0
+    seen = set()
+    for desired in desired_objects:
+        metadata = desired.get('metadata', {})
+        resource_id = f"{desired['kind']}/{metadata.get('namespace', 'cluster')}/{metadata['name']}"
+        if resource_id in seen:
+            continue
+        seen.add(resource_id)
+        try:
+            live = await _live_resource(api_client, desired)
+        except Exception as error:
+            message = str(error)
+            if '404' in message or 'Not Found' in message:
+                missing.append(resource_id)
+            else:
+                errors.append({'resource': resource_id, 'error': message})
+            continue
+        expected_yaml = yaml.safe_dump(_clean_manifest(desired), sort_keys=False).splitlines(True)
+        actual_yaml = yaml.safe_dump(_clean_manifest(live), sort_keys=False).splitlines(True)
+        diff = ''.join(difflib.unified_diff(expected_yaml, actual_yaml, fromfile=f'expected/{resource_id}', tofile=f'live/{resource_id}'))
+        if diff:
+            changes.append({'resource': resource_id, 'diff': diff})
+        else:
+            unchanged += 1
+    return {'changes': changes, 'missing': missing, 'errors': errors, 'unchanged': unchanged, 'total': len(seen)}
 
 
 class RollbackRequest(BaseModel):

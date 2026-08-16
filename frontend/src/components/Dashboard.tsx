@@ -42,7 +42,8 @@ import {
   Dropdown,
   Option,
   Textarea,
-  Checkbox
+  Checkbox,
+  Tooltip
 } from "@fluentui/react-components";
 import { 
   MoreHorizontal20Regular, 
@@ -110,7 +111,7 @@ const useStyles = makeStyles({
     flex: 1,
     display: 'flex',
     flexDirection: 'column',
-    height: 'calc(100vh - 32px)',
+    height: '100%',
     minHeight: 0,
     minWidth: 0,
     overflow: 'hidden'
@@ -164,9 +165,12 @@ const useStyles = makeStyles({
     backdropFilter: 'blur(16px)',
   },
   content: {
-    flex: 1,
+    flexGrow: 1,
+    flexShrink: 1,
     flexBasis: 0,
+    height: 0,
     overflowY: 'auto',
+    overflowX: 'hidden',
     ...shorthands.padding('1.75rem'),
     display: 'flex',
     flexDirection: 'column',
@@ -377,6 +381,36 @@ const ConfigMapEditorDetail = ({ context, resource }: { context: string; resourc
   </div>
 );
 
+const CustomResourceSummary = ({ kind, resource }: { kind?: string; resource: ResourceDetail }) => {
+  const spec = resource.spec || {};
+  const status = resource.status || {};
+  const isVpa = kind === 'VerticalPodAutoscaler';
+  const isVpaCheckpoint = kind === 'VerticalPodAutoscalerCheckpoint';
+  if (!isVpa && !isVpaCheckpoint) return <>
+    {Object.entries(spec).slice(0, 10).map(([key, value]) => <div key={key} style={{ fontSize: '0.75rem', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}><strong>{key}:</strong> {typeof value === 'object' ? JSON.stringify(value) : String(value)}</div>)}
+    {Object.keys(spec).length > 10 && <div style={{ fontSize: '0.7rem', opacity: 0.5 }}>+ {Object.keys(spec).length - 10} more fields</div>}
+  </>;
+
+  const target = spec.targetRef || {};
+  const recommendation = status.recommendation || spec.recommendation || {};
+  const containers = recommendation.containerRecommendations || spec.containerRecommendations || [];
+  return <div style={{ display: 'grid', gap: '10px', fontSize: '0.8rem' }}>
+    {isVpa ? <>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+        <Badge appearance="tint" color="brand">Target: {target.kind || 'Workload'}/{target.name || '—'}</Badge>
+        <Badge appearance="tint">Mode: {spec.updatePolicy?.updateMode || 'Auto'}</Badge>
+      </div>
+      {containers.length ? <div style={{ display: 'grid', gap: '5px' }}>{containers.map((container: any) => <div key={container.containerName || 'container'}><strong>{container.containerName || 'container'}</strong><span style={{ opacity: 0.7 }}> · target </span><code>{Object.entries(container.target || {}).map(([key, value]) => `${key}=${value}`).join(', ') || '—'}</code></div>)}</div> : <span style={{ opacity: 0.65 }}>No recommendation has been recorded yet.</span>}
+    </> : <>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+        <Badge appearance="tint" color="brand">VPA: {spec.vpaObjectName || spec.vpaName || '—'}</Badge>
+        <Badge appearance="tint">Container: {spec.containerName || '—'}</Badge>
+      </div>
+      <span style={{ opacity: 0.72 }}>Checkpoint data is controller-managed. Review the YAML before making changes.</span>
+    </>}
+  </div>;
+};
+
 const NATIVE_OTHERS = [
   { label: 'Services', plural: 'services', group: 'core', version: 'v1' },
   { label: 'Ingresses', plural: 'ingresses', group: 'networking.k8s.io', version: 'v1' },
@@ -498,8 +532,14 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
   
   const [resources, setResources] = useState<ResourceItem[]>([]);
   const [visibleCount, setVisibleCount] = useState(100);
+  const [nextPageToken, setNextPageToken] = useState<string | null>(null);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const contentRef = useRef<HTMLDivElement | null>(null);
   const [metrics, setMetrics] = useState<Record<string, any>>({});
   const [crds, setCrds] = useState<CRD[]>([]);
+  const [pinnedCustomKinds, setPinnedCustomKinds] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem('k8sune.pinnedCustomKinds') || '[]'); } catch { return []; }
+  });
   const [namespaces, setNamespaces] = useState<string[]>([]);
   const [selectedNamespaces, setSelectedNamespaces] = useState<string[]>(['All Namespaces']);
   const [clusterSettings, setClusterSettings] = useState<any>({ metrics_source: 'standard' });
@@ -513,6 +553,8 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
   const [helmRelease, setHelmRelease] = useState<any>(null);
   const [helmHistory, setHelmHistory] = useState<any[]>([]);
   const [helmValuesDiff, setHelmValuesDiff] = useState('');
+  const [helmDrift, setHelmDrift] = useState<any | null>(null);
+  const [helmDriftLoading, setHelmDriftLoading] = useState(false);
   const [storageSection, setStorageSection] = useState<'pvcs' | 'pvs' | 'classes' | 'attachments' | 'snapshots'>('pvcs');
   const [networkSection, setNetworkSection] = useState<'services' | 'ingresses' | 'policies' | 'endpoints' | 'diagnostics'>('services');
   const [dnsHost, setDnsHost] = useState('kubernetes.default.svc');
@@ -579,6 +621,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
   const openHelmRelease = async (release: any) => {
     try {
       setHelmRelease(release);
+      setHelmDrift(null);
       const history = await apiFetch<any>(`/api/helm/${context}/releases/${encodeURIComponent(release.namespace)}/${encodeURIComponent(release.name)}/history`);
       setHelmHistory(history.history || []);
       const revisions = history.history || [];
@@ -587,6 +630,18 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
         setHelmValuesDiff(diff.diff || 'No values changes.');
       } else setHelmValuesDiff('No prior revision to compare.');
     } catch (error: any) { feedback.notice('Could not load Helm release', error.message || String(error), 'error'); }
+  };
+
+  const loadHelmDrift = async () => {
+    if (!helmRelease || !context) return;
+    setHelmDriftLoading(true);
+    try {
+      setHelmDrift(await apiFetch<any>(`/api/helm/${context}/releases/${encodeURIComponent(helmRelease.namespace)}/${encodeURIComponent(helmRelease.name)}/drift`));
+    } catch (error: any) {
+      feedback.notice('Could not compare release resources', error.message || String(error), 'error');
+    } finally {
+      setHelmDriftLoading(false);
+    }
   };
 
   useEffect(() => { if (initialNodeCommand) setIsNodeCommandOpen(true); }, [initialNodeCommand]);
@@ -669,8 +724,16 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
   const fetchNamespaces = async () => {
     if (!context) return;
     try {
-      const data = await apiFetch<{ items: any[] }>(`/api/resources/${context}/namespaces`);
-      setNamespaces(data.items.map(n => n.name));
+      const names: string[] = [];
+      let continuation: string | null = null;
+      do {
+        const query = new URLSearchParams({ limit: '200' });
+        if (continuation) query.set('continue', continuation);
+        const data = await apiFetch<{ items: any[]; continue?: string }>(`/api/resources/${context}/namespaces?${query}`);
+        names.push(...data.items.map(n => n.name));
+        continuation = data.continue || null;
+      } while (continuation);
+      setNamespaces(names);
     } catch (e) {
       console.error(e);
     }
@@ -886,11 +949,23 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
     window.open(url, '_blank', 'noopener,noreferrer');
   };
 
-  const loadData = async () => {
+  const loadData = async (append = false) => {
     if (!context) return;
-    setLoading(true);
+    if (append && (!nextPageToken || isLoadingMore)) return;
+    if (append) setIsLoadingMore(true);
+    else setLoading(true);
     setViewError(null);
     try {
+      const pageSize = Math.max(30, Math.min(150, Math.ceil(((contentRef.current?.clientHeight || window.innerHeight - 180) / 38)) + 12));
+      const query = new URLSearchParams({ limit: String(pageSize) });
+      if (append && nextPageToken) query.set('continue', nextPageToken);
+      if (selectedNamespaces.length === 1 && selectedNamespaces[0] !== 'All Namespaces') query.set('namespace', selectedNamespaces[0]);
+      const listUrl = (path: string) => `${path}?${query.toString()}`;
+      const setListPage = (data: { items: ResourceItem[]; continue?: string | null }) => {
+        setResources(current => append ? [...current, ...data.items] : data.items);
+        setNextPageToken(data.continue || null);
+        setVisibleCount(current => append ? current + pageSize : pageSize);
+      };
       loadActivePortForwards();
       if (activeView === 'overview') {
         const data = await apiFetch<any>(`/api/resources/${context}/overview`);
@@ -918,21 +993,21 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
          const plural = activeView.replace('custom_', '');
          const crd = crds.find(c => c.plural === plural);
          if (crd) {
-            const data = await apiFetch<{ items: ResourceItem[] }>(
-              `/api/resources/${context}/generic/${crd.group}/${crd.version}/${crd.plural}`
+            const data = await apiFetch<{ items: ResourceItem[], continue?: string }>(
+              listUrl(`/api/resources/${context}/generic/${crd.group}/${crd.version}/${crd.plural}`)
             );
-            setResources(data.items);
+            setListPage(data);
          }
       } else if (activeView.startsWith('other_')) {
           const plural = activeView.replace('other_', '');
           const other = NATIVE_OTHERS.find(o => o.plural === plural);
           if (other) {
-            const data = await apiFetch<{ items: ResourceItem[] }>(`/api/resources/${context}/${plural}`);
-            setResources(data.items);
+            const data = await apiFetch<{ items: ResourceItem[], continue?: string }>(listUrl(`/api/resources/${context}/${plural}`));
+            setListPage(data);
           }
       } else {
-        const data = await apiFetch<{ items: ResourceItem[] }>(`/api/resources/${context}/${activeView}`);
-        setResources(data.items);
+        const data = await apiFetch<{ items: ResourceItem[], continue?: string }>(listUrl(`/api/resources/${context}/${activeView}`));
+        setListPage(data);
       }
       
       if (activeView === 'pods') {
@@ -953,6 +1028,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
       }
     } finally {
       setLoading(false);
+      setIsLoadingMore(false);
     }
   };
 
@@ -1228,8 +1304,19 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
   };
 
   const resourceTypeForAction = (type: string) => {
-    if (type.startsWith('custom_')) return type;
+    if (type.startsWith('custom_')) {
+      const crd = crds.find(item => item.plural === type.replace('custom_', ''));
+      return crd ? `custom_${crd.group}_${crd.version}_${crd.plural}` : type;
+    }
     return ({ other_services: 'services', other_ingresses: 'ingresses', other_replicasets: 'replicasets', other_jobs: 'jobs', pvcs: 'persistentvolumeclaims' } as Record<string, string>)[type] || type;
+  };
+
+  const togglePinnedCustomKind = (plural: string) => {
+    setPinnedCustomKinds(current => {
+      const next = current.includes(plural) ? current.filter(item => item !== plural) : [...current, plural];
+      localStorage.setItem('k8sune.pinnedCustomKinds', JSON.stringify(next));
+      return next;
+    });
   };
 
   const handleSaveResourceYaml = async (resource: ResourceItem) => {
@@ -1423,7 +1510,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
       if (eventSourceRef.current) eventSourceRef.current.close();
       clearInterval(metricsInterval);
     };
-  }, [activeView, context, selectedResource]);
+  }, [activeView, context, selectedResource, selectedNamespaces]);
 
   useEffect(() => {
       if (selectedResource) {
@@ -1504,12 +1591,15 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
 
   useEffect(() => {
     setVisibleCount(100);
-  }, [activeView, selectedNamespaces, search, context]);
+    setNextPageToken(null);
+  }, [activeView, selectedNamespaces, context]);
 
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const target = e.currentTarget;
     if (target.scrollHeight - target.scrollTop <= target.clientHeight + 100) {
-      if (visibleCount < sortedAndFilteredResources.length) {
+      if (nextPageToken && !isLoadingMore) {
+        void loadData(true);
+      } else if (visibleCount < sortedAndFilteredResources.length) {
         setVisibleCount(prev => prev + 100);
       }
     }
@@ -2309,6 +2399,14 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
             Helm Releases
           </Button>
 
+          {pinnedCustomKinds.length > 0 && <div style={{ display: 'grid', gap: '3px', marginTop: '4px' }}>
+            <span style={{ padding: '0 10px', fontSize: '0.68rem', letterSpacing: '0.05em', opacity: 0.56 }}>PINNED RESOURCES</span>
+            {pinnedCustomKinds.map(plural => {
+              const crd = crds.find(item => item.plural === plural);
+              return crd ? <Button key={crd.name} appearance="subtle" className={styles.sidebarItem} icon={<Database20Regular />} onContextMenu={event => openSidebarContextMenu(event, `custom_${crd.plural}`)} style={activeView === `custom_${crd.plural}` ? { backgroundColor: 'var(--colorNeutralBackground3)' } : {}} onClick={() => handleSelectCRD(crd)}>{crd.kind}</Button> : null;
+            })}
+          </div>}
+
           <Accordion collapsible>
              <AccordionItem value="others">
                 <AccordionHeader expandIconPosition="end" size="small">
@@ -2344,15 +2442,18 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
                 <AccordionPanel>
                     <div style={{ display: 'flex', flexDirection: 'column' }}>
                         {crds.map(crd => (
-                            <Button 
-                                key={crd.name} 
-                                appearance="subtle" 
-                                className={styles.sidebarSubItem}
-                                onClick={() => handleSelectCRD(crd)}
-                                style={activeView === `custom_${crd.plural}` ? { backgroundColor: 'var(--colorNeutralBackground3)', opacity: 1 } : {}}
-                            >
-                                {crd.kind}
-                            </Button>
+                            <div key={crd.name} style={{ display: 'flex', alignItems: 'center' }}>
+                              <Button
+                                  appearance="subtle"
+                                  className={styles.sidebarSubItem}
+                                  onContextMenu={event => openSidebarContextMenu(event, `custom_${crd.plural}`)}
+                                  onClick={() => handleSelectCRD(crd)}
+                                  style={{ flex: 1, ...(activeView === `custom_${crd.plural}` ? { backgroundColor: 'var(--colorNeutralBackground3)', opacity: 1 } : {}) }}
+                              >
+                                  {crd.kind}
+                              </Button>
+                              <Button size="small" appearance="subtle" aria-label={`${pinnedCustomKinds.includes(crd.plural) ? 'Unpin' : 'Pin'} ${crd.kind}`} title={pinnedCustomKinds.includes(crd.plural) ? 'Unpin from sidebar' : 'Pin to sidebar'} onClick={() => togglePinnedCustomKind(crd.plural)} style={{ minWidth: '28px', padding: '2px 4px', opacity: pinnedCustomKinds.includes(crd.plural) ? 1 : 0.5 }}>★</Button>
+                            </div>
                         ))}
                     </div>
                 </AccordionPanel>
@@ -2611,13 +2712,13 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
               <Button 
                 icon={<ArrowClockwise20Regular />} 
                 size="small" 
-                onClick={selectedResource ? loadResourceDetail : loadData}
+                onClick={selectedResource ? () => loadResourceDetail() : () => loadData()}
                 disabled={loading}
               />
             </div>
           </header>
 
-          <div className={styles.content} onScroll={handleScroll}>
+          <div className={styles.content} ref={contentRef} onScroll={handleScroll}>
             {viewError && <Card className={styles.tableCard} style={{ borderColor: 'rgba(255, 77, 99, 0.42)' }}><div style={{ padding: '14px 18px' }}><Title3>Could not load this resource view</Title3><div style={{ fontSize: '0.82rem', opacity: 0.72, marginTop: '5px', overflowWrap: 'anywhere' }}>{viewError}</div></div></Card>}
             {!context ? (
                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', opacity: 0.5, gap: '1rem' }}>
@@ -2636,7 +2737,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
                           Please verify your network connection, kubeconfig, and check if the API server is online.
                       </span>
                   </div>
-                  <Button appearance="primary" icon={loading ? <Spinner size="tiny" /> : <ArrowClockwise20Regular />} onClick={loadData} disabled={loading}>
+                  <Button appearance="primary" icon={loading ? <Spinner size="tiny" /> : <ArrowClockwise20Regular />} onClick={() => loadData()} disabled={loading}>
                       {loading ? 'Connecting...' : 'Try Again'}
                   </Button>
                </div>
@@ -2895,16 +2996,9 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
 
                                     {selectedResource.type.startsWith('custom_') && resourceDetail.spec && (
                                         <Card style={{ backgroundColor: 'var(--colorNeutralBackground2)', height: '100%' }}>
-                                            <CardHeader header={<Subtitle2>Spec Summary</Subtitle2>} />
+                                            <CardHeader header={<Subtitle2>{['VerticalPodAutoscaler', 'VerticalPodAutoscalerCheckpoint'].includes(crds.find(item => item.plural === selectedResource.type.replace('custom_', ''))?.kind || '') ? 'Autoscaling Summary' : 'Spec Summary'}</Subtitle2>} />
                                             <div style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '6px', overflowY: 'auto', maxHeight: '180px' }}>
-                                                {Object.entries(resourceDetail.spec || {}).slice(0, 10).map(([k, v]) => (
-                                                    <div key={k} style={{ fontSize: '0.75rem', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
-                                                        <strong>{k}:</strong> {typeof v === 'object' ? JSON.stringify(v) : String(v)}
-                                                    </div>
-                                                ))}
-                                                {Object.keys(resourceDetail.spec || {}).length > 10 && (
-                                                    <div style={{ fontSize: '0.7rem', opacity: 0.5 }}>+ {Object.keys(resourceDetail.spec).length - 10} more fields</div>
-                                                )}
+                                                <CustomResourceSummary kind={crds.find(item => item.plural === selectedResource.type.replace('custom_', ''))?.kind} resource={resourceDetail} />
                                             </div>
                                         </Card>
                                     )}
@@ -3124,7 +3218,27 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
             ) : activeView === 'helm' ? (
                 <div style={{ display: 'grid', gap: '16px' }}>
                   {helmError && <Card className={styles.tableCard} style={{ borderColor: 'rgba(255, 166, 0, 0.45)' }}><div style={{ padding: '14px 18px' }}><Title3>Helm releases could not be loaded</Title3><div style={{ fontSize: '0.82rem', opacity: 0.72, marginTop: '5px' }}>{helmError}</div><div style={{ fontSize: '0.78rem', opacity: 0.6, marginTop: '8px' }}>The Kubernetes connection remains available. Check that Helm is installed and that this context is reachable by the Helm CLI.</div></div></Card>}
-                  {helmRelease && <Dialog open onOpenChange={(_, data) => !data.open && setHelmRelease(null)}><DialogSurface style={{ width: 'min(920px, calc(100vw - 32px))' }}><DialogBody><DialogTitle>{helmRelease.name} · Helm history</DialogTitle><DialogContent><div style={{ display: 'grid', gap: '14px' }}><Table><TableHeader><TableRow><TableHeaderCell>Revision</TableHeaderCell><TableHeaderCell>Status</TableHeaderCell><TableHeaderCell>Chart</TableHeaderCell><TableHeaderCell>Updated</TableHeaderCell><TableHeaderCell /></TableRow></TableHeader><TableBody>{helmHistory.map(item => <TableRow key={item.revision}><TableCell>{item.revision}</TableCell><TableCell><Badge color={item.status === 'deployed' ? 'success' : 'warning'}>{item.status}</Badge></TableCell><TableCell>{item.chart}</TableCell><TableCell>{item.updated}</TableCell><TableCell><Button size="small" appearance="secondary" onClick={async () => { if (!await feedback.confirm('Rollback Helm release?', `Rollback ${helmRelease.name} to revision ${item.revision}?`, { confirmLabel: 'Rollback', destructive: true })) return; await apiFetch(`/api/helm/${context}/releases/${encodeURIComponent(helmRelease.namespace)}/${encodeURIComponent(helmRelease.name)}/rollback`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ revision: item.revision }) }); setHelmRelease(null); loadData(); }}>Rollback</Button></TableCell></TableRow>)}</TableBody></Table><div><Title3>Values diff: latest revision</Title3><pre style={{ maxHeight: '280px', overflow: 'auto', whiteSpace: 'pre-wrap', padding: '12px', borderRadius: '8px', background: 'rgba(0,0,0,0.24)', fontSize: '0.76rem' }}>{helmValuesDiff}</pre></div></div></DialogContent><DialogActions><Button onClick={() => setHelmRelease(null)}>Close</Button></DialogActions></DialogBody></DialogSurface></Dialog>}
+                  {helmRelease && <Dialog open onOpenChange={(_, data) => !data.open && setHelmRelease(null)}>
+                    <DialogSurface style={{ width: 'min(980px, calc(100vw - 32px))', maxHeight: 'calc(100vh - 32px)' }}>
+                      <DialogBody>
+                        <DialogTitle>{helmRelease.name} · Helm history</DialogTitle>
+                        <DialogContent>
+                          <div style={{ display: 'grid', gap: '18px', maxHeight: 'calc(100vh - 180px)', overflowY: 'auto', paddingRight: '4px' }}>
+                            <div style={{ overflowX: 'auto', border: '1px solid var(--colorNeutralStroke2)', borderRadius: '8px' }}>
+                              <Table size="small" style={{ minWidth: '700px', tableLayout: 'fixed' }}>
+                                <TableHeader><TableRow><TableHeaderCell style={{ width: '74px' }}>Revision</TableHeaderCell><TableHeaderCell style={{ width: '110px' }}>Status</TableHeaderCell><TableHeaderCell>Chart</TableHeaderCell><TableHeaderCell style={{ width: '190px' }}>Updated</TableHeaderCell><TableHeaderCell style={{ width: '112px' }}>Action</TableHeaderCell></TableRow></TableHeader>
+                                <TableBody>{helmHistory.map(item => <TableRow key={item.revision}><TableCell>{item.revision}</TableCell><TableCell><Badge color={item.status === 'deployed' ? 'success' : 'warning'}>{item.status}</Badge></TableCell><TableCell style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.chart}>{item.chart}</TableCell><TableCell style={{ whiteSpace: 'nowrap', fontSize: '0.78rem' }}>{item.updated}</TableCell><TableCell><Button size="small" appearance="secondary" onClick={async () => { if (!await feedback.confirm('Rollback Helm release?', `Rollback ${helmRelease.name} to revision ${item.revision}?`, { confirmLabel: 'Rollback', destructive: true })) return; await apiFetch(`/api/helm/${context}/releases/${encodeURIComponent(helmRelease.namespace)}/${encodeURIComponent(helmRelease.name)}/rollback`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ revision: item.revision }) }); setHelmRelease(null); loadData(); }}>Rollback</Button></TableCell></TableRow>)}</TableBody>
+                              </Table>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}><Title3 style={{ fontSize: '0.92rem', lineHeight: 1.2 }}>Values diff · latest revision</Title3><Button size="small" appearance="secondary" onClick={loadHelmDrift} disabled={helmDriftLoading}>{helmDriftLoading ? 'Comparing…' : 'Check resource drift'}</Button></div>
+                            <pre style={{ margin: 0, maxHeight: '240px', overflow: 'auto', whiteSpace: 'pre-wrap', padding: '12px', borderRadius: '8px', background: 'rgba(0,0,0,0.24)', fontSize: '0.76rem', lineHeight: 1.45 }}>{helmValuesDiff}</pre>
+                            {helmDrift && <div style={{ display: 'grid', gap: '10px' }}><div style={{ fontSize: '0.82rem', opacity: 0.72 }}><strong>{helmDrift.changes?.length || 0}</strong> changed · <strong>{helmDrift.missing?.length || 0}</strong> missing · <strong>{helmDrift.unchanged || 0}</strong> in sync of {helmDrift.total || 0} rendered resources</div>{helmDrift.changes?.map((change: any) => <details key={change.resource}><summary style={{ cursor: 'pointer', fontWeight: 600 }}>{change.resource}</summary><pre style={{ margin: '8px 0 0', maxHeight: '220px', overflow: 'auto', whiteSpace: 'pre-wrap', padding: '10px', borderRadius: '7px', background: 'rgba(255,166,0,0.08)', fontSize: '0.74rem' }}>{change.diff}</pre></details>)}{helmDrift.missing?.map((resource: string) => <Badge key={resource} color="warning" appearance="tint">Missing: {resource}</Badge>)}{helmDrift.errors?.map((item: any) => <div key={item.resource} style={{ fontSize: '0.78rem', color: 'var(--colorPaletteRedForeground1)' }}>{item.resource}: {item.error}</div>)}</div>}
+                          </div>
+                        </DialogContent>
+                        <DialogActions><Button onClick={() => setHelmRelease(null)}>Close</Button></DialogActions>
+                      </DialogBody>
+                    </DialogSurface>
+                  </Dialog>}
                   <div className={styles.overviewGrid}><Card className={styles.metricCard}><Title3>Helm releases</Title3><div style={{ fontSize: '2rem', fontWeight: 700 }}>{helmData?.releases?.length || 0}</div></Card><Card className={styles.metricCard}><Title3>Deployed</Title3><div style={{ fontSize: '2rem', fontWeight: 700 }}>{helmData?.releases?.filter((item: any) => item.status === 'deployed').length || 0}</div></Card></div>
                   <div className={styles.tableCard}><Table><TableHeader><TableRow><TableHeaderCell>Release</TableHeaderCell><TableHeaderCell>Namespace</TableHeaderCell><TableHeaderCell>Status</TableHeaderCell><TableHeaderCell>Chart</TableHeaderCell><TableHeaderCell>App version</TableHeaderCell><TableHeaderCell>Revision</TableHeaderCell></TableRow></TableHeader><TableBody>{helmData?.releases?.map((item: any) => <TableRow key={`${item.namespace}/${item.name}`} onClick={() => openHelmRelease(item)} style={{ cursor: 'pointer' }}><TableCell><strong>{item.name}</strong></TableCell><TableCell>{item.namespace}</TableCell><TableCell><Badge color={item.status === 'deployed' ? 'success' : 'warning'}>{item.status}</Badge></TableCell><TableCell>{item.chart}</TableCell><TableCell>{item.app_version || '—'}</TableCell><TableCell>{item.revision}</TableCell></TableRow>)}</TableBody></Table></div>
                 </div>
@@ -3245,9 +3359,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
                             {overview?.components?.map((c: any) => (
                                 <div key={c.name} className={styles.infoItem} style={{ borderBottom: 'none' }}>
                                     <span style={{ fontSize: '0.85rem' }}>{c.name}</span>
-                                    <Badge title={c.status === 'Healthy' ? undefined : (c.reason || 'No health reason was reported.')} color={c.status === 'Healthy' ? 'success' : 'important'} appearance="outline">
-                                        {c.status}
-                                    </Badge>
+                                    {c.status === 'Healthy' ? <Badge color="success" appearance="outline">{c.status}</Badge> : <Tooltip relationship="description" content={<div style={{ maxWidth: '300px', lineHeight: 1.4 }}><strong>{c.name}</strong><br />{c.reason || 'The API server did not report a health reason.'}</div>}><Badge color="important" appearance="outline" style={{ cursor: 'help' }}>{c.status}</Badge></Tooltip>}
                                 </div>
                             ))}
                         </div>

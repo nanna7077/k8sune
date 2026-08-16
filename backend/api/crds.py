@@ -17,7 +17,11 @@ async def get_crds(context_name: str):
                 {
                     "name": c.metadata.name,
                     "group": c.spec.group,
-                    "version": c.spec.versions[0].name,
+                    # CRDs commonly retain older, no-longer-served versions.
+                    # Use the storage version first (then any served version),
+                    # so list/detail/YAML requests always target an API endpoint
+                    # the cluster actually exposes.
+                    "version": next((v.name for v in c.spec.versions if v.storage), next((v.name for v in c.spec.versions if v.served), c.spec.versions[0].name)),
                     "kind": c.spec.names.kind,
                     "plural": c.spec.names.plural,
                     "scope": c.spec.scope

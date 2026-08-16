@@ -62,6 +62,45 @@ def workload_restart_counts(workloads, pods):
     return counts
 
 
+async def paged_workload_restart_counts(v1, workloads):
+    """Calculate restart counts one workload at a time without listing every Pod cluster-wide."""
+    counts = {}
+    for workload in workloads:
+        selector = (workload.spec.selector.match_labels or {}) if workload.spec and workload.spec.selector else {}
+        selector_text = ','.join(f'{key}={value}' for key, value in selector.items())
+        total, token = 0, None
+        while True:
+            page = await v1.list_namespaced_pod(workload.metadata.namespace, label_selector=selector_text, limit=250, _continue=token)
+            for pod in page.items:
+                statuses = ((pod.status.container_statuses or []) + (pod.status.init_container_statuses or [])) if pod.status else []
+                total += sum(status.restart_count or 0 for status in statuses)
+            token = getattr(page.metadata, '_continue', None) or getattr(page.metadata, 'continue_', None)
+            if not token:
+                break
+        counts[(workload.metadata.namespace, workload.metadata.name)] = total
+    return counts
+
+
+def page_result(response, mapper):
+    """Serialize one Kubernetes continuation page without retaining the full list."""
+    metadata = getattr(response, 'metadata', None)
+    next_token = getattr(metadata, '_continue', None) or getattr(metadata, 'continue_', None) or None
+    return {"items": [mapper(item) for item in response.items], "continue": next_token}
+
+
+async def collect_all_pages(fetch_page):
+    """Read every server-retained item through Kubernetes continuation tokens."""
+    items, token = [], None
+    while True:
+        page = await fetch_page(token)
+        page_items = page.get('items', []) if isinstance(page, dict) else page.items
+        items.extend(page_items)
+        metadata = page.get('metadata', {}) if isinstance(page, dict) else getattr(page, 'metadata', None)
+        token = (metadata.get('continue') if isinstance(metadata, dict) else getattr(metadata, '_continue', None) or getattr(metadata, 'continue_', None))
+        if not token:
+            return items
+
+
 async def inspect_tls_certificate(encoded_certificate: str) -> dict:
     """Return public X.509 metadata only; never return secret or private-key material."""
     try:
@@ -264,108 +303,84 @@ async def get_nodes(context_name: str):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/resources/{context_name}/pods")
-async def get_pods(context_name: str, namespace: str = None):
+async def get_pods(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: str | None = Query(None, alias="continue")):
     try:
         client = await cluster_manager.get_client(context_name)
         v1 = CoreV1Api(client)
         if namespace:
-            pods = await v1.list_namespaced_pod(namespace)
+            pods = await v1.list_namespaced_pod(namespace, limit=limit, _continue=continue_token)
         else:
-            pods = await v1.list_pod_for_all_namespaces()
-        
-        return {
-            "items": [
-                {
-                    "name": p.metadata.name,
-                    "namespace": p.metadata.namespace,
-                    "status": p.status.phase,
-                    "ip": p.status.pod_ip,
-                    "node": p.spec.node_name,
-                    "containers": [container.name for container in (p.spec.containers or [])],
-                    "creation_timestamp": p.metadata.creation_timestamp
-                } for p in pods.items
-            ]
-        }
+            pods = await v1.list_pod_for_all_namespaces(limit=limit, _continue=continue_token)
+        return page_result(pods, lambda p: {
+            "name": p.metadata.name, "namespace": p.metadata.namespace, "status": p.status.phase,
+            "ip": p.status.pod_ip, "node": p.spec.node_name,
+            "containers": [container.name for container in (p.spec.containers or [])],
+            "creation_timestamp": p.metadata.creation_timestamp,
+        })
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/resources/{context_name}/deployments")
-async def get_deployments(context_name: str, namespace: str = None):
+async def get_deployments(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: str | None = Query(None, alias="continue")):
     try:
         client = await cluster_manager.get_client(context_name)
         apps_v1 = AppsV1Api(client)
+        pod_api = CoreV1Api(client)
         if namespace:
-            items = await apps_v1.list_namespaced_deployment(namespace)
-            pods = await CoreV1Api(client).list_namespaced_pod(namespace)
+            items = await apps_v1.list_namespaced_deployment(namespace, limit=limit, _continue=continue_token)
         else:
-            items = await apps_v1.list_deployment_for_all_namespaces()
-            pods = await CoreV1Api(client).list_pod_for_all_namespaces()
-        restart_counts = workload_restart_counts(items.items, pods.items)
+            items = await apps_v1.list_deployment_for_all_namespaces(limit=limit, _continue=continue_token)
+        restart_counts = await paged_workload_restart_counts(pod_api, items.items)
         
         return {
-            "items": [
-                {
+            "items": [{
                     "name": d.metadata.name,
                     "namespace": d.metadata.namespace,
                     "replicas": d.spec.replicas if d.spec.replicas is not None else 1,
                     "ready_replicas": d.status.ready_replicas or 0,
                     "restart_count": restart_counts.get((d.metadata.namespace, d.metadata.name), 0),
                     "creation_timestamp": d.metadata.creation_timestamp
-                } for d in items.items
-            ]
+                } for d in items.items],
+            "continue": getattr(items.metadata, '_continue', None) or getattr(items.metadata, 'continue_', None) or None,
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/resources/{context_name}/namespaces")
-async def get_namespaces(context_name: str):
+async def get_namespaces(context_name: str, limit: int = Query(100, ge=1, le=500), continue_token: str | None = Query(None, alias="continue")):
     try:
         client = await cluster_manager.get_client(context_name)
         v1 = CoreV1Api(client)
-        ns = await v1.list_namespace()
-        return {
-            "items": [
-                {
-                    "name": n.metadata.name,
-                    "status": n.status.phase,
-                    "creation_timestamp": n.metadata.creation_timestamp
-                } for n in ns.items
-            ]
-        }
+        ns = await v1.list_namespace(limit=limit, _continue=continue_token)
+        return page_result(ns, lambda n: {"name": n.metadata.name, "status": n.status.phase, "creation_timestamp": n.metadata.creation_timestamp})
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/resources/{context_name}/configmaps")
-async def get_configmaps(context_name: str, namespace: str = None):
+async def get_configmaps(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: str | None = Query(None, alias="continue")):
     try:
         client = await cluster_manager.get_client(context_name)
         v1 = CoreV1Api(client)
         if namespace:
-            items = await v1.list_namespaced_config_map(namespace)
+            items = await v1.list_namespaced_config_map(namespace, limit=limit, _continue=continue_token)
         else:
-            items = await v1.list_config_map_for_all_namespaces()
-        return {
-            "items": [
-                {
-                    "name": i.metadata.name,
-                    "namespace": i.metadata.namespace,
-                    "data_count": len(i.data) if i.data else 0,
-                    "creation_timestamp": i.metadata.creation_timestamp
-                } for i in items.items
-            ]
-        }
+            items = await v1.list_config_map_for_all_namespaces(limit=limit, _continue=continue_token)
+        return page_result(items, lambda i: {
+            "name": i.metadata.name, "namespace": i.metadata.namespace,
+            "data_count": len(i.data) if i.data else 0, "creation_timestamp": i.metadata.creation_timestamp,
+        })
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/resources/{context_name}/secrets")
-async def get_secrets(context_name: str, namespace: str = None):
+async def get_secrets(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: str | None = Query(None, alias="continue")):
     try:
         client = await cluster_manager.get_client(context_name)
         v1 = CoreV1Api(client)
         if namespace:
-            items = await v1.list_namespaced_secret(namespace)
+            items = await v1.list_namespaced_secret(namespace, limit=limit, _continue=continue_token)
         else:
-            items = await v1.list_secret_for_all_namespaces()
+            items = await v1.list_secret_for_all_namespaces(limit=limit, _continue=continue_token)
         result = []
         for item in items.items:
             tls_info = None
@@ -380,7 +395,8 @@ async def get_secrets(context_name: str, namespace: str = None):
                 "tls_info": tls_info,
                 "creation_timestamp": item.metadata.creation_timestamp,
             })
-        return {"items": result}
+        metadata = getattr(items, 'metadata', None)
+        return {"items": result, "continue": getattr(metadata, '_continue', None) or getattr(metadata, 'continue_', None) or None}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -497,14 +513,14 @@ async def get_pvc(context_name: str, namespace: str = None):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/resources/{context_name}/generic/{group}/{version}/{plural}")
-async def get_generic_resources(context_name: str, group: str, version: str, plural: str, namespace: str = None):
+async def get_generic_resources(context_name: str, group: str, version: str, plural: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: str | None = Query(None, alias="continue")):
     try:
         client = await cluster_manager.get_client(context_name)
         custom = CustomObjectsApi(client)
         if namespace:
-            items = await custom.list_namespaced_custom_object(group, version, namespace, plural)
+            items = await custom.list_namespaced_custom_object(group, version, namespace, plural, limit=limit, _continue=continue_token)
         else:
-            items = await custom.list_cluster_custom_object(group, version, plural)
+            items = await custom.list_cluster_custom_object(group, version, plural, limit=limit, _continue=continue_token)
             
         return {
             "items": [
@@ -513,7 +529,8 @@ async def get_generic_resources(context_name: str, group: str, version: str, plu
                     "namespace": i['metadata'].get('namespace'),
                     "creation_timestamp": i['metadata']['creationTimestamp']
                 } for i in items.get('items', [])
-            ]
+            ],
+            "continue": (items.get('metadata') or {}).get('continue')
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -750,14 +767,14 @@ async def get_resource_events(context_name: str, namespace: str, name: str):
         field_selector = f"involvedObject.name={name}"
         if namespace not in ('Cluster', 'none', 'undefined', 'null'):
             core_result, modern_result = await asyncio.gather(
-                v1.list_namespaced_event(namespace, field_selector=field_selector),
-                custom.list_namespaced_custom_object('events.k8s.io', 'v1', namespace, 'events', field_selector=f"regarding.name={name}"),
+                collect_all_pages(lambda token: v1.list_namespaced_event(namespace, field_selector=field_selector, limit=500, _continue=token)),
+                collect_all_pages(lambda token: custom.list_namespaced_custom_object('events.k8s.io', 'v1', namespace, 'events', field_selector=f"regarding.name={name}", limit=500, _continue=token)),
                 return_exceptions=True,
             )
         else:
             core_result, modern_result = await asyncio.gather(
-                v1.list_event_for_all_namespaces(field_selector=field_selector),
-                custom.list_cluster_custom_object('events.k8s.io', 'v1', 'events', field_selector=f"regarding.name={name}"),
+                collect_all_pages(lambda token: v1.list_event_for_all_namespaces(field_selector=field_selector, limit=500, _continue=token)),
+                collect_all_pages(lambda token: custom.list_cluster_custom_object('events.k8s.io', 'v1', 'events', field_selector=f"regarding.name={name}", limit=500, _continue=token)),
                 return_exceptions=True,
             )
         deduplicated, errors = {}, []
@@ -765,7 +782,7 @@ async def get_resource_events(context_name: str, namespace: str, name: str):
             if isinstance(result, Exception):
                 errors.append(str(result))
                 continue
-            event_items = result.get('items', []) if isinstance(result, dict) else result.items
+            event_items = result
             for event in event_items:
                 serialized = serialize_event(event)
                 key = (serialized['namespace'], serialized['object_kind'], serialized['object_name'], serialized['type'], serialized['reason'], serialized['message'])
@@ -813,8 +830,23 @@ def serialize_event(event):
 async def get_namespace_events(context_name: str, namespace: str):
     try:
         client = await cluster_manager.get_client(context_name)
-        events = await CoreV1Api(client).list_namespaced_event(namespace)
-        return {"items": [serialize_event(event) for event in sorted(events.items, key=lambda x: x.last_timestamp or "", reverse=True)]}
+        v1, custom = CoreV1Api(client), CustomObjectsApi(client)
+        core_result, modern_result = await asyncio.gather(
+            collect_all_pages(lambda token: v1.list_namespaced_event(namespace, limit=500, _continue=token)),
+            collect_all_pages(lambda token: custom.list_namespaced_custom_object('events.k8s.io', 'v1', namespace, 'events', limit=500, _continue=token)),
+            return_exceptions=True,
+        )
+        deduplicated = {}
+        for result in (core_result, modern_result):
+            if isinstance(result, Exception):
+                continue
+            for event in result:
+                serialized = serialize_event(event)
+                key = (serialized['namespace'], serialized['object_kind'], serialized['object_name'], serialized['type'], serialized['reason'], serialized['message'])
+                previous = deduplicated.get(key)
+                if not previous or str(serialized.get('last_timestamp') or '') > str(previous.get('last_timestamp') or ''):
+                    deduplicated[key] = serialized
+        return {"items": sorted(deduplicated.values(), key=lambda event: str(event.get('last_timestamp') or event.get('first_timestamp') or ''), reverse=True)}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -876,44 +908,42 @@ async def get_pod_details(context_name: str, namespace: str, pod_name: str):
 
 
 @router.get("/resources/{context_name}/statefulsets")
-async def get_statefulsets(context_name: str, namespace: str = None):
+async def get_statefulsets(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: str | None = Query(None, alias="continue")):
     try:
         client = await cluster_manager.get_client(context_name)
         apps_v1 = AppsV1Api(client)
         if namespace:
-            items = await apps_v1.list_namespaced_stateful_set(namespace)
-            pods = await CoreV1Api(client).list_namespaced_pod(namespace)
+            items = await apps_v1.list_namespaced_stateful_set(namespace, limit=limit, _continue=continue_token)
         else:
-            items = await apps_v1.list_stateful_set_for_all_namespaces()
-            pods = await CoreV1Api(client).list_pod_for_all_namespaces()
-        restart_counts = workload_restart_counts(items.items, pods.items)
-        return {"items": [{"name": i.metadata.name, "namespace": i.metadata.namespace, "replicas": i.spec.replicas if i.spec.replicas is not None else 1, "ready_replicas": i.status.ready_replicas or 0, "restart_count": restart_counts.get((i.metadata.namespace, i.metadata.name), 0), "creation_timestamp": i.metadata.creation_timestamp} for i in items.items]}
+            items = await apps_v1.list_stateful_set_for_all_namespaces(limit=limit, _continue=continue_token)
+        restart_counts = await paged_workload_restart_counts(CoreV1Api(client), items.items)
+        return {"items": [{"name": i.metadata.name, "namespace": i.metadata.namespace, "replicas": i.spec.replicas if i.spec.replicas is not None else 1, "ready_replicas": i.status.ready_replicas or 0, "restart_count": restart_counts.get((i.metadata.namespace, i.metadata.name), 0), "creation_timestamp": i.metadata.creation_timestamp} for i in items.items], "continue": getattr(items.metadata, '_continue', None) or getattr(items.metadata, 'continue_', None) or None}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/resources/{context_name}/daemonsets")
-async def get_daemonsets(context_name: str, namespace: str = None):
+async def get_daemonsets(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: str | None = Query(None, alias="continue")):
     try:
         client = await cluster_manager.get_client(context_name)
         apps_v1 = AppsV1Api(client)
         if namespace:
-            items = await apps_v1.list_namespaced_daemon_set(namespace)
+            items = await apps_v1.list_namespaced_daemon_set(namespace, limit=limit, _continue=continue_token)
         else:
-            items = await apps_v1.list_daemon_set_for_all_namespaces()
-        return {"items": [{"name": i.metadata.name, "namespace": i.metadata.namespace, "desired": i.status.desired_number_scheduled if i.status.desired_number_scheduled is not None else 0, "ready": i.status.number_ready if i.status.number_ready is not None else 0, "creation_timestamp": i.metadata.creation_timestamp} for i in items.items]}
+            items = await apps_v1.list_daemon_set_for_all_namespaces(limit=limit, _continue=continue_token)
+        return {"items": [{"name": i.metadata.name, "namespace": i.metadata.namespace, "desired": i.status.desired_number_scheduled if i.status.desired_number_scheduled is not None else 0, "ready": i.status.number_ready if i.status.number_ready is not None else 0, "creation_timestamp": i.metadata.creation_timestamp} for i in items.items], "continue": getattr(items.metadata, '_continue', None) or getattr(items.metadata, 'continue_', None) or None}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/resources/{context_name}/cronjobs")
-async def get_cronjobs(context_name: str, namespace: str = None):
+async def get_cronjobs(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: str | None = Query(None, alias="continue")):
     try:
         client = await cluster_manager.get_client(context_name)
         batch = BatchV1Api(client)
         if namespace:
-            items = await batch.list_namespaced_cron_job(namespace)
+            items = await batch.list_namespaced_cron_job(namespace, limit=limit, _continue=continue_token)
         else:
-            items = await batch.list_cron_job_for_all_namespaces()
-        return {"items": [{"name": i.metadata.name, "namespace": i.metadata.namespace, "schedule": i.spec.schedule, "last_schedule": i.status.last_schedule_time, "active": len(i.status.active) if i.status.active else 0, "creation_timestamp": i.metadata.creation_timestamp} for i in items.items]}
+            items = await batch.list_cron_job_for_all_namespaces(limit=limit, _continue=continue_token)
+        return {"items": [{"name": i.metadata.name, "namespace": i.metadata.namespace, "schedule": i.spec.schedule, "last_schedule": i.status.last_schedule_time, "active": len(i.status.active) if i.status.active else 0, "creation_timestamp": i.metadata.creation_timestamp} for i in items.items], "continue": getattr(items.metadata, '_continue', None) or getattr(items.metadata, 'continue_', None) or None}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -1088,14 +1118,14 @@ async def scale_deployment(context_name: str, namespace: str, name: str, replica
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/resources/{context_name}/services")
-async def get_services(context_name: str, namespace: str = None):
+async def get_services(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: str | None = Query(None, alias="continue")):
     try:
         client = await cluster_manager.get_client(context_name)
         v1 = CoreV1Api(client)
         if namespace:
-            items = await v1.list_namespaced_service(namespace)
+            items = await v1.list_namespaced_service(namespace, limit=limit, _continue=continue_token)
         else:
-            items = await v1.list_service_for_all_namespaces()
+            items = await v1.list_service_for_all_namespaces(limit=limit, _continue=continue_token)
         return {
             "items": [
                 {
@@ -1106,20 +1136,20 @@ async def get_services(context_name: str, namespace: str = None):
                     "ports": [f"{p.port}:{p.target_port}/{p.protocol}" for p in i.spec.ports] if i.spec.ports else [],
                     "creation_timestamp": i.metadata.creation_timestamp
                 } for i in items.items
-            ]
+            ], "continue": getattr(items.metadata, '_continue', None) or getattr(items.metadata, 'continue_', None) or None
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/resources/{context_name}/ingresses")
-async def get_ingresses(context_name: str, namespace: str = None):
+async def get_ingresses(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: str | None = Query(None, alias="continue")):
     try:
         client = await cluster_manager.get_client(context_name)
         networking_v1 = NetworkingV1Api(client)
         if namespace:
-            items = await networking_v1.list_namespaced_ingress(namespace)
+            items = await networking_v1.list_namespaced_ingress(namespace, limit=limit, _continue=continue_token)
         else:
-            items = await networking_v1.list_ingress_for_all_namespaces()
+            items = await networking_v1.list_ingress_for_all_namespaces(limit=limit, _continue=continue_token)
         return {
             "items": [
                 {
@@ -1128,20 +1158,20 @@ async def get_ingresses(context_name: str, namespace: str = None):
                     "hosts": [rule.host for rule in i.spec.rules] if i.spec.rules else [],
                     "creation_timestamp": i.metadata.creation_timestamp
                 } for i in items.items
-            ]
+            ], "continue": getattr(items.metadata, '_continue', None) or getattr(items.metadata, 'continue_', None) or None
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/resources/{context_name}/replicasets")
-async def get_replicasets(context_name: str, namespace: str = None):
+async def get_replicasets(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: str | None = Query(None, alias="continue")):
     try:
         client = await cluster_manager.get_client(context_name)
         apps_v1 = AppsV1Api(client)
         if namespace:
-            items = await apps_v1.list_namespaced_replica_set(namespace)
+            items = await apps_v1.list_namespaced_replica_set(namespace, limit=limit, _continue=continue_token)
         else:
-            items = await apps_v1.list_replica_set_for_all_namespaces()
+            items = await apps_v1.list_replica_set_for_all_namespaces(limit=limit, _continue=continue_token)
         return {
             "items": [
                 {
@@ -1151,20 +1181,20 @@ async def get_replicasets(context_name: str, namespace: str = None):
                     "ready_replicas": i.status.ready_replicas or 0,
                     "creation_timestamp": i.metadata.creation_timestamp
                 } for i in items.items
-            ]
+            ], "continue": getattr(items.metadata, '_continue', None) or getattr(items.metadata, 'continue_', None) or None
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/resources/{context_name}/jobs")
-async def get_jobs(context_name: str, namespace: str = None):
+async def get_jobs(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: str | None = Query(None, alias="continue")):
     try:
         client = await cluster_manager.get_client(context_name)
         batch_v1 = BatchV1Api(client)
         if namespace:
-            items = await batch_v1.list_namespaced_job(namespace)
+            items = await batch_v1.list_namespaced_job(namespace, limit=limit, _continue=continue_token)
         else:
-            items = await batch_v1.list_job_for_all_namespaces()
+            items = await batch_v1.list_job_for_all_namespaces(limit=limit, _continue=continue_token)
         return {
             "items": [
                 {
@@ -1176,7 +1206,7 @@ async def get_jobs(context_name: str, namespace: str = None):
                     "failed": i.status.failed or 0,
                     "creation_timestamp": i.metadata.creation_timestamp
                 } for i in items.items
-            ]
+            ], "continue": getattr(items.metadata, '_continue', None) or getattr(items.metadata, 'continue_', None) or None
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
