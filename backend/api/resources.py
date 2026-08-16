@@ -85,7 +85,22 @@ def page_result(response, mapper):
     """Serialize one Kubernetes continuation page without retaining the full list."""
     metadata = getattr(response, 'metadata', None)
     next_token = getattr(metadata, '_continue', None) or getattr(metadata, 'continue_', None) or None
-    return {"items": [mapper(item) for item in response.items], "continue": next_token}
+    items = [mapper(item) for item in response.items]
+    # The API may provide an exact number of items after this continuation
+    # page. It lets the UI show progress without first fetching every object.
+    remaining = getattr(metadata, 'remaining_item_count', None)
+    total = len(items) + remaining if isinstance(remaining, int) else None
+    return {"items": items, "continue": next_token, "total": total}
+
+
+def page_metadata(response, item_count: int):
+    """Continuation and optional total metadata for hand-serialized list APIs."""
+    metadata = getattr(response, 'metadata', None)
+    remaining = getattr(metadata, 'remaining_item_count', None)
+    return {
+        "continue": getattr(metadata, '_continue', None) or getattr(metadata, 'continue_', None) or None,
+        "total": item_count + remaining if isinstance(remaining, int) else None,
+    }
 
 
 async def collect_all_pages(fetch_page):
@@ -341,7 +356,7 @@ async def get_deployments(context_name: str, namespace: str = None, limit: int =
                     "restart_count": restart_counts.get((d.metadata.namespace, d.metadata.name), 0),
                     "creation_timestamp": d.metadata.creation_timestamp
                 } for d in items.items],
-            "continue": getattr(items.metadata, '_continue', None) or getattr(items.metadata, 'continue_', None) or None,
+            **page_metadata(items, len(items.items)),
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -395,8 +410,7 @@ async def get_secrets(context_name: str, namespace: str = None, limit: int = Que
                 "tls_info": tls_info,
                 "creation_timestamp": item.metadata.creation_timestamp,
             })
-        metadata = getattr(items, 'metadata', None)
-        return {"items": result, "continue": getattr(metadata, '_continue', None) or getattr(metadata, 'continue_', None) or None}
+        return {"items": result, **page_metadata(items, len(result))}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -522,15 +536,19 @@ async def get_generic_resources(context_name: str, group: str, version: str, plu
         else:
             items = await custom.list_cluster_custom_object(group, version, plural, limit=limit, _continue=continue_token)
             
-        return {
-            "items": [
+        result = [
                 {
                     "name": i['metadata']['name'],
                     "namespace": i['metadata'].get('namespace'),
                     "creation_timestamp": i['metadata']['creationTimestamp']
                 } for i in items.get('items', [])
-            ],
-            "continue": (items.get('metadata') or {}).get('continue')
+            ]
+        metadata = items.get('metadata') or {}
+        remaining = metadata.get('remainingItemCount')
+        return {
+            "items": result,
+            "continue": metadata.get('continue'),
+            "total": len(result) + remaining if isinstance(remaining, int) else None,
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -917,7 +935,7 @@ async def get_statefulsets(context_name: str, namespace: str = None, limit: int 
         else:
             items = await apps_v1.list_stateful_set_for_all_namespaces(limit=limit, _continue=continue_token)
         restart_counts = await paged_workload_restart_counts(CoreV1Api(client), items.items)
-        return {"items": [{"name": i.metadata.name, "namespace": i.metadata.namespace, "replicas": i.spec.replicas if i.spec.replicas is not None else 1, "ready_replicas": i.status.ready_replicas or 0, "restart_count": restart_counts.get((i.metadata.namespace, i.metadata.name), 0), "creation_timestamp": i.metadata.creation_timestamp} for i in items.items], "continue": getattr(items.metadata, '_continue', None) or getattr(items.metadata, 'continue_', None) or None}
+        return {"items": [{"name": i.metadata.name, "namespace": i.metadata.namespace, "replicas": i.spec.replicas if i.spec.replicas is not None else 1, "ready_replicas": i.status.ready_replicas or 0, "restart_count": restart_counts.get((i.metadata.namespace, i.metadata.name), 0), "creation_timestamp": i.metadata.creation_timestamp} for i in items.items], **page_metadata(items, len(items.items))}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -930,7 +948,7 @@ async def get_daemonsets(context_name: str, namespace: str = None, limit: int = 
             items = await apps_v1.list_namespaced_daemon_set(namespace, limit=limit, _continue=continue_token)
         else:
             items = await apps_v1.list_daemon_set_for_all_namespaces(limit=limit, _continue=continue_token)
-        return {"items": [{"name": i.metadata.name, "namespace": i.metadata.namespace, "desired": i.status.desired_number_scheduled if i.status.desired_number_scheduled is not None else 0, "ready": i.status.number_ready if i.status.number_ready is not None else 0, "creation_timestamp": i.metadata.creation_timestamp} for i in items.items], "continue": getattr(items.metadata, '_continue', None) or getattr(items.metadata, 'continue_', None) or None}
+        return {"items": [{"name": i.metadata.name, "namespace": i.metadata.namespace, "desired": i.status.desired_number_scheduled if i.status.desired_number_scheduled is not None else 0, "ready": i.status.number_ready if i.status.number_ready is not None else 0, "creation_timestamp": i.metadata.creation_timestamp} for i in items.items], **page_metadata(items, len(items.items))}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -943,7 +961,7 @@ async def get_cronjobs(context_name: str, namespace: str = None, limit: int = Qu
             items = await batch.list_namespaced_cron_job(namespace, limit=limit, _continue=continue_token)
         else:
             items = await batch.list_cron_job_for_all_namespaces(limit=limit, _continue=continue_token)
-        return {"items": [{"name": i.metadata.name, "namespace": i.metadata.namespace, "schedule": i.spec.schedule, "last_schedule": i.status.last_schedule_time, "active": len(i.status.active) if i.status.active else 0, "creation_timestamp": i.metadata.creation_timestamp} for i in items.items], "continue": getattr(items.metadata, '_continue', None) or getattr(items.metadata, 'continue_', None) or None}
+        return {"items": [{"name": i.metadata.name, "namespace": i.metadata.namespace, "schedule": i.spec.schedule, "last_schedule": i.status.last_schedule_time, "active": len(i.status.active) if i.status.active else 0, "creation_timestamp": i.metadata.creation_timestamp} for i in items.items], **page_metadata(items, len(items.items))}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -1136,7 +1154,7 @@ async def get_services(context_name: str, namespace: str = None, limit: int = Qu
                     "ports": [f"{p.port}:{p.target_port}/{p.protocol}" for p in i.spec.ports] if i.spec.ports else [],
                     "creation_timestamp": i.metadata.creation_timestamp
                 } for i in items.items
-            ], "continue": getattr(items.metadata, '_continue', None) or getattr(items.metadata, 'continue_', None) or None
+            ], **page_metadata(items, len(items.items))
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -1158,7 +1176,7 @@ async def get_ingresses(context_name: str, namespace: str = None, limit: int = Q
                     "hosts": [rule.host for rule in i.spec.rules] if i.spec.rules else [],
                     "creation_timestamp": i.metadata.creation_timestamp
                 } for i in items.items
-            ], "continue": getattr(items.metadata, '_continue', None) or getattr(items.metadata, 'continue_', None) or None
+            ], **page_metadata(items, len(items.items))
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -1181,7 +1199,7 @@ async def get_replicasets(context_name: str, namespace: str = None, limit: int =
                     "ready_replicas": i.status.ready_replicas or 0,
                     "creation_timestamp": i.metadata.creation_timestamp
                 } for i in items.items
-            ], "continue": getattr(items.metadata, '_continue', None) or getattr(items.metadata, 'continue_', None) or None
+            ], **page_metadata(items, len(items.items))
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -1206,7 +1224,7 @@ async def get_jobs(context_name: str, namespace: str = None, limit: int = Query(
                     "failed": i.status.failed or 0,
                     "creation_timestamp": i.metadata.creation_timestamp
                 } for i in items.items
-            ], "continue": getattr(items.metadata, '_continue', None) or getattr(items.metadata, 'continue_', None) or None
+            ], **page_metadata(items, len(items.items))
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

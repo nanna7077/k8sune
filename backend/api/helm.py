@@ -13,6 +13,41 @@ from backend.cluster.manager import cluster_manager
 router = APIRouter()
 
 
+# Use known Kubernetes API paths before discovery. Besides being faster, this
+# matters for Rancher-proxied contexts where discovery can be intercepted by a
+# management endpoint that the workload identity is not allowed to read.
+KNOWN_RESOURCES = {
+    ('v1', 'ConfigMap'): ('configmaps', True),
+    ('v1', 'Service'): ('services', True),
+    ('v1', 'Secret'): ('secrets', True),
+    ('v1', 'ServiceAccount'): ('serviceaccounts', True),
+    ('v1', 'Pod'): ('pods', True),
+    ('v1', 'PersistentVolumeClaim'): ('persistentvolumeclaims', True),
+    ('v1', 'Namespace'): ('namespaces', False),
+    ('v1', 'PersistentVolume'): ('persistentvolumes', False),
+    ('v1', 'ResourceQuota'): ('resourcequotas', True),
+    ('v1', 'LimitRange'): ('limitranges', True),
+    ('v1', 'Endpoints'): ('endpoints', True),
+    ('apps/v1', 'Deployment'): ('deployments', True),
+    ('apps/v1', 'StatefulSet'): ('statefulsets', True),
+    ('apps/v1', 'DaemonSet'): ('daemonsets', True),
+    ('apps/v1', 'ReplicaSet'): ('replicasets', True),
+    ('batch/v1', 'Job'): ('jobs', True),
+    ('batch/v1', 'CronJob'): ('cronjobs', True),
+    ('networking.k8s.io/v1', 'Ingress'): ('ingresses', True),
+    ('networking.k8s.io/v1', 'NetworkPolicy'): ('networkpolicies', True),
+    ('policy/v1', 'PodDisruptionBudget'): ('poddisruptionbudgets', True),
+    ('autoscaling/v1', 'HorizontalPodAutoscaler'): ('horizontalpodautoscalers', True),
+    ('autoscaling/v2', 'HorizontalPodAutoscaler'): ('horizontalpodautoscalers', True),
+    ('rbac.authorization.k8s.io/v1', 'Role'): ('roles', True),
+    ('rbac.authorization.k8s.io/v1', 'RoleBinding'): ('rolebindings', True),
+    ('rbac.authorization.k8s.io/v1', 'ClusterRole'): ('clusterroles', False),
+    ('rbac.authorization.k8s.io/v1', 'ClusterRoleBinding'): ('clusterrolebindings', False),
+    ('storage.k8s.io/v1', 'StorageClass'): ('storageclasses', False),
+    ('storage.k8s.io/v1', 'VolumeAttachment'): ('volumeattachments', False),
+}
+
+
 def _clean_manifest(value):
     """Remove server-managed fields so desired state can be compared meaningfully."""
     if not isinstance(value, dict):
@@ -57,19 +92,24 @@ async def _live_resource(api_client, desired):
     else:
         base_path = f'/api/{quote(api_version, safe="")}'
     response_types_map = {'200': 'object'}
-    discovery = await api_client.call_api(base_path, 'GET', response_types_map=response_types_map, _return_http_data_only=True)
-    resources = discovery.get('resources', []) if isinstance(discovery, dict) else []
-    resource = next((item for item in resources if item.get('kind') == kind and '/' not in item.get('name', '')), None)
-    if not resource:
-        raise ValueError(f'{api_version} {kind} is not discoverable on this cluster')
+    known = KNOWN_RESOURCES.get((api_version, kind))
+    if known:
+        resource_name, namespaced = known
+    else:
+        discovery = await api_client.call_api(base_path, 'GET', response_types_map=response_types_map, _return_http_data_only=True)
+        resources = discovery.get('resources', []) if isinstance(discovery, dict) else []
+        resource = next((item for item in resources if item.get('kind') == kind and '/' not in item.get('name', '')), None)
+        if not resource:
+            raise ValueError(f'{api_version} {kind} is not discoverable on this cluster')
+        resource_name, namespaced = resource['name'], resource.get('namespaced', False)
     namespace = metadata.get('namespace')
     name = metadata['name']
-    if resource.get('namespaced'):
+    if namespaced:
         if not namespace:
             raise ValueError(f'{kind}/{name} is namespaced but its manifest has no namespace')
-        path = f"{base_path}/namespaces/{quote(namespace, safe='')}/{resource['name']}/{quote(name, safe='')}"
+        path = f"{base_path}/namespaces/{quote(namespace, safe='')}/{resource_name}/{quote(name, safe='')}"
     else:
-        path = f"{base_path}/{resource['name']}/{quote(name, safe='')}"
+        path = f"{base_path}/{resource_name}/{quote(name, safe='')}"
     return await api_client.call_api(path, 'GET', response_types_map=response_types_map, _return_http_data_only=True)
 
 

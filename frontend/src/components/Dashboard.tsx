@@ -114,6 +114,7 @@ const useStyles = makeStyles({
     flex: 1,
     display: 'grid',
     height: '100%',
+    gridTemplateRows: 'minmax(0, 1fr)',
     minHeight: 0,
     minWidth: 0,
     overflow: 'hidden'
@@ -169,7 +170,8 @@ const useStyles = makeStyles({
   content: {
     minHeight: 0,
     height: 'auto',
-    overflowY: 'auto',
+    overflowY: 'scroll',
+    scrollbarGutter: 'stable',
     overflowX: 'hidden',
     ...shorthands.padding('1.75rem'),
     display: 'flex',
@@ -177,6 +179,10 @@ const useStyles = makeStyles({
     gap: '1.25rem',
     backgroundColor: 'transparent',
     minWidth: 0,
+    '&::-webkit-scrollbar': { width: '10px' },
+    '&::-webkit-scrollbar-track': { backgroundColor: 'transparent' },
+    '&::-webkit-scrollbar-thumb': { backgroundColor: 'rgba(171, 183, 220, 0.34)', borderRadius: '999px', border: '3px solid transparent', backgroundClip: 'padding-box' },
+    '&::-webkit-scrollbar-thumb:hover': { backgroundColor: 'rgba(171, 183, 220, 0.58)' },
   },
   tableCard: {
     backgroundColor: 'rgba(20, 22, 30, 0.72)',
@@ -553,6 +559,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
   const [resources, setResources] = useState<ResourceItem[]>([]);
   const [visibleCount, setVisibleCount] = useState(100);
   const [nextPageToken, setNextPageToken] = useState<string | null>(null);
+  const [resourceTotal, setResourceTotal] = useState<number | null>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const [metrics, setMetrics] = useState<Record<string, any>>({});
@@ -981,14 +988,18 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
     setViewError(null);
     try {
       const pageSize = Math.max(30, Math.min(150, Math.ceil(((contentRef.current?.clientHeight || window.innerHeight - 180) / 38)) + 12));
-      const query = new URLSearchParams({ limit: String(pageSize) });
+      // Start with several viewports of rows. This gives the list a real scroll
+      // range immediately while keeping large clusters paged on the server.
+      const requestedLimit = append ? pageSize : Math.min(500, pageSize * 4);
+      const query = new URLSearchParams({ limit: String(requestedLimit) });
       if (append && nextPageToken) query.set('continue', nextPageToken);
       if (selectedNamespaces.length === 1 && selectedNamespaces[0] !== 'All Namespaces') query.set('namespace', selectedNamespaces[0]);
       const listUrl = (path: string) => `${path}?${query.toString()}`;
-      const setListPage = (data: { items: ResourceItem[]; continue?: string | null }) => {
+      const setListPage = (data: { items: ResourceItem[]; continue?: string | null; total?: number | null }) => {
         setResources(current => append ? [...current, ...data.items] : data.items);
         setNextPageToken(data.continue || null);
-        setVisibleCount(current => append ? current + pageSize : pageSize);
+        setResourceTotal(data.total == null ? null : (append ? resources.length : 0) + data.total);
+        setVisibleCount(current => append ? current + pageSize : requestedLimit);
       };
       loadActivePortForwards();
       if (activeView === 'overview') {
@@ -1617,6 +1628,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
   useEffect(() => {
     setVisibleCount(100);
     setNextPageToken(null);
+    setResourceTotal(null);
   }, [activeView, selectedNamespaces, context]);
 
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
@@ -3267,7 +3279,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
                   <div className={styles.overviewGrid}>
                     <Card className={styles.metricCard}><Title3>Releases</Title3><div style={{ fontSize: '2rem', fontWeight: 700 }}>{helmData?.releases?.length || 0}</div></Card>
                     <Card className={styles.metricCard}><Title3>Namespaces</Title3><div style={{ fontSize: '2rem', fontWeight: 700 }}>{new Set((helmData?.releases || []).map((item: any) => item.namespace).filter(Boolean)).size}</div></Card>
-                    <Card className={styles.metricCard}><Title3>Needs attention</Title3><div style={{ fontSize: '2rem', fontWeight: 700 }}>{helmData?.releases?.filter((item: any) => item.status !== 'deployed').length || 0}</div></Card>
+                    <Tooltip relationship="description" content="Releases whose current Helm status is not deployed, such as failed, pending, superseded, or uninstalling."><Card className={styles.metricCard} style={{ cursor: 'help' }}><Title3>Needs attention</Title3><div style={{ fontSize: '2rem', fontWeight: 700 }}>{helmData?.releases?.filter((item: any) => item.status !== 'deployed').length || 0}</div></Card></Tooltip>
                   </div>
                   <div className={styles.tableCard}><Table><TableHeader><TableRow><TableHeaderCell>Release</TableHeaderCell><TableHeaderCell>Namespace</TableHeaderCell><TableHeaderCell>Status</TableHeaderCell><TableHeaderCell>Chart</TableHeaderCell><TableHeaderCell>App version</TableHeaderCell><TableHeaderCell>Revision</TableHeaderCell></TableRow></TableHeader><TableBody>{helmData?.releases?.map((item: any) => <TableRow key={`${item.namespace}/${item.name}`} onClick={() => openHelmRelease(item)} style={{ cursor: 'pointer' }}><TableCell><strong>{item.name}</strong></TableCell><TableCell>{item.namespace}</TableCell><TableCell><Badge color={item.status === 'deployed' ? 'success' : 'warning'}>{item.status}</Badge></TableCell><TableCell>{item.chart}</TableCell><TableCell>{item.app_version || '—'}</TableCell><TableCell>{item.revision}</TableCell></TableRow>)}</TableBody></Table></div>
                 </div>
@@ -3409,6 +3421,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
                     </div>
                 </div>
             ) : (
+              <>
               <div className={styles.tableCard}>
                 <Table>
                   <TableHeader>
@@ -3426,6 +3439,10 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
                   </div>
                 )}
               </div>
+              {(visibleResources.length > 0 || isLoadingMore) && <div aria-live="polite" style={{ minHeight: '34px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', fontSize: '0.78rem', opacity: 0.7 }}>
+                {isLoadingMore ? <><Spinner size="tiny" /> Loading more resources…</> : <>{resourceTotal != null ? `Showing ${visibleResources.length} of ${resourceTotal} resources` : `Showing ${visibleResources.length} loaded resources`}{(nextPageToken || visibleResources.length < sortedAndFilteredResources.length) && ' · scroll to load more'}</>}
+              </div>}
+              </>
             )}
           </div>
         </main>
