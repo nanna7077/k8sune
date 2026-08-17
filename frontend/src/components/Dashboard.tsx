@@ -557,11 +557,10 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
   const isResizing = useRef(false);
   
   const [resources, setResources] = useState<ResourceItem[]>([]);
-  const [visibleCount, setVisibleCount] = useState(100);
   const [nextPageToken, setNextPageToken] = useState<string | null>(null);
   const [resourceTotal, setResourceTotal] = useState<number | null>(null);
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const contentRef = useRef<HTMLDivElement | null>(null);
+  const [currentPage, setCurrentPage] = useState(0);
+  const [pageTokens, setPageTokens] = useState<(string | null)[]>([null]);
   const [metrics, setMetrics] = useState<Record<string, any>>({});
   const [crds, setCrds] = useState<CRD[]>([]);
   const [pinnedCustomKinds, setPinnedCustomKinds] = useState<string[]>(() => {
@@ -980,26 +979,26 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
     window.open(url, '_blank', 'noopener,noreferrer');
   };
 
-  const loadData = async (append = false) => {
+  const loadData = async (pageIndex = 0, explicitPageToken?: string | null) => {
     if (!context) return;
-    if (append && (!nextPageToken || isLoadingMore)) return;
-    if (append) setIsLoadingMore(true);
-    else setLoading(true);
+    setLoading(true);
     setViewError(null);
     try {
-      const pageSize = Math.max(30, Math.min(150, Math.ceil(((contentRef.current?.clientHeight || window.innerHeight - 180) / 38)) + 12));
-      // Start with several viewports of rows. This gives the list a real scroll
-      // range immediately while keeping large clusters paged on the server.
-      const requestedLimit = append ? pageSize : Math.min(500, pageSize * 4);
-      const query = new URLSearchParams({ limit: String(requestedLimit) });
-      if (append && nextPageToken) query.set('continue', nextPageToken);
-      if (selectedNamespaces.length === 1 && selectedNamespaces[0] !== 'All Namespaces') query.set('namespace', selectedNamespaces[0]);
-      const listUrl = (path: string) => `${path}?${query.toString()}`;
-      const setListPage = (data: { items: ResourceItem[]; continue?: string | null; total?: number | null }) => {
-        setResources(current => append ? [...current, ...data.items] : data.items);
-        setNextPageToken(data.continue || null);
-        setResourceTotal(data.total == null ? null : (append ? resources.length : 0) + data.total);
-        setVisibleCount(current => append ? current + pageSize : requestedLimit);
+      const requestListPage = async (limit: number, continueToken?: string | null) => {
+        const query = new URLSearchParams({ limit: String(limit) });
+        if (continueToken) query.set('continue', continueToken);
+        if (selectedNamespaces.length === 1 && selectedNamespaces[0] !== 'All Namespaces') query.set('namespace', selectedNamespaces[0]);
+        const listUrl = (path: string) => `${path}?${query.toString()}`;
+        if (activeView.startsWith('custom_')) {
+          const plural = activeView.replace('custom_', '');
+          const crd = crds.find(c => c.plural === plural);
+          return crd ? apiFetch<{ items: ResourceItem[]; continue?: string | null; total?: number | null }>(listUrl(`/api/resources/${context}/generic/${crd.group}/${crd.version}/${crd.plural}`)) : null;
+        }
+        if (activeView.startsWith('other_')) {
+          const plural = activeView.replace('other_', '');
+          return NATIVE_OTHERS.some(item => item.plural === plural) ? apiFetch<{ items: ResourceItem[]; continue?: string | null; total?: number | null }>(listUrl(`/api/resources/${context}/${plural}`)) : null;
+        }
+        return apiFetch<{ items: ResourceItem[]; continue?: string | null; total?: number | null }>(listUrl(`/api/resources/${context}/${activeView}`));
       };
       loadActivePortForwards();
       if (activeView === 'overview') {
@@ -1024,25 +1023,43 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
       } else if (activeView === 'crds_list') {
          const data = await apiFetch<{ items: CRD[] }>(`/api/crds/${context}`);
          setCrds(data.items);
-      } else if (activeView.startsWith('custom_')) {
-         const plural = activeView.replace('custom_', '');
-         const crd = crds.find(c => c.plural === plural);
-         if (crd) {
-            const data = await apiFetch<{ items: ResourceItem[], continue?: string }>(
-              listUrl(`/api/resources/${context}/generic/${crd.group}/${crd.version}/${crd.plural}`)
-            );
-            setListPage(data);
-         }
-      } else if (activeView.startsWith('other_')) {
-          const plural = activeView.replace('other_', '');
-          const other = NATIVE_OTHERS.find(o => o.plural === plural);
-          if (other) {
-            const data = await apiFetch<{ items: ResourceItem[], continue?: string }>(listUrl(`/api/resources/${context}/${plural}`));
-            setListPage(data);
-          }
       } else {
-        const data = await apiFetch<{ items: ResourceItem[], continue?: string }>(listUrl(`/api/resources/${context}/${activeView}`));
-        setListPage(data);
+        const normalizedSearch = search.trim().toLowerCase();
+        if (normalizedSearch) {
+          // Kubernetes continuation tokens are server-side cursors. To make a
+          // substring search complete, read the cursor chain in the background,
+          // then present its matches through the same fixed-size paginator.
+          const allItems: ResourceItem[] = [];
+          let token: string | null | undefined = null;
+          do {
+            const data = await requestListPage(500, token);
+            if (!data) break;
+            allItems.push(...data.items);
+            token = data.continue || null;
+          } while (token);
+          const matches = allItems.filter(item => item.name.toLowerCase().includes(normalizedSearch) || item.namespace?.toLowerCase().includes(normalizedSearch) || item.internal_ip?.includes(normalizedSearch) || item.external_ip?.includes(normalizedSearch) || item.os?.toLowerCase().includes(normalizedSearch));
+          setResources(matches);
+          setResourceTotal(matches.length);
+          setCurrentPage(0);
+          setPageTokens([null]);
+          setNextPageToken(null);
+        } else {
+          const token = pageIndex === 0 ? null : explicitPageToken ?? pageTokens[pageIndex];
+          if (pageIndex > 0 && !token) return;
+          const data = await requestListPage(20, token);
+          if (!data) return;
+          setResources(data.items);
+          setNextPageToken(data.continue || null);
+          setResourceTotal(previous => pageIndex === 0 ? data.total ?? null : previous);
+          setCurrentPage(pageIndex);
+          setPageTokens(previous => {
+            const tokens = pageIndex === 0 ? [null] : [...previous];
+            tokens[pageIndex] = token;
+            if (data.continue) tokens[pageIndex + 1] = data.continue;
+            else tokens.length = pageIndex + 1;
+            return tokens;
+          });
+        }
       }
       
       if (activeView === 'pods') {
@@ -1063,7 +1080,6 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
       }
     } finally {
       setLoading(false);
-      setIsLoadingMore(false);
     }
   };
 
@@ -1622,25 +1638,27 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
   }, [resources, search, sortState, selectedNamespaces]);
 
   const visibleResources = useMemo(() => {
-    return sortedAndFilteredResources.slice(0, visibleCount);
-  }, [sortedAndFilteredResources, visibleCount]);
+    if (!search.trim()) return sortedAndFilteredResources;
+    const start = currentPage * 20;
+    return sortedAndFilteredResources.slice(start, start + 20);
+  }, [sortedAndFilteredResources, search, currentPage]);
+
+  const totalPages = search.trim()
+    ? Math.max(1, Math.ceil(sortedAndFilteredResources.length / 20))
+    : resourceTotal != null ? Math.max(1, Math.ceil(resourceTotal / 20)) : null;
 
   useEffect(() => {
-    setVisibleCount(100);
     setNextPageToken(null);
     setResourceTotal(null);
+    setCurrentPage(0);
+    setPageTokens([null]);
   }, [activeView, selectedNamespaces, context]);
 
-  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
-    const target = e.currentTarget;
-    if (target.scrollHeight - target.scrollTop <= target.clientHeight + 100) {
-      if (nextPageToken && !isLoadingMore) {
-        void loadData(true);
-      } else if (visibleCount < sortedAndFilteredResources.length) {
-        setVisibleCount(prev => prev + 100);
-      }
-    }
-  };
+  useEffect(() => {
+    if (selectedResource || ['overview', 'rbac', 'network', 'persistentvolumes', 'helm', 'settings', 'crds_list'].includes(activeView)) return;
+    const timer = window.setTimeout(() => { void loadData(0); }, 250);
+    return () => window.clearTimeout(timer);
+  }, [search]);
 
   const toggleSort = (columnId: string) => {
     setSortState(prev => ({
@@ -2755,7 +2773,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
             </div>
           </header>
 
-          <div className={styles.content} ref={contentRef} onScroll={handleScroll}>
+          <div className={styles.content}>
             {viewError && <Card className={styles.tableCard} style={{ borderColor: 'rgba(255, 77, 99, 0.42)' }}><div style={{ padding: '14px 18px' }}><Title3>Could not load this resource view</Title3><div style={{ fontSize: '0.82rem', opacity: 0.72, marginTop: '5px', overflowWrap: 'anywhere' }}>{viewError}</div></div></Card>}
             {!context ? (
                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', opacity: 0.5, gap: '1rem' }}>
@@ -3439,8 +3457,10 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
                   </div>
                 )}
               </div>
-              {(visibleResources.length > 0 || isLoadingMore) && <div aria-live="polite" style={{ minHeight: '34px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', fontSize: '0.78rem', opacity: 0.7 }}>
-                {isLoadingMore ? <><Spinner size="tiny" /> Loading more resources…</> : <>{resourceTotal != null ? `Showing ${visibleResources.length} of ${resourceTotal} resources` : `Showing ${visibleResources.length} loaded resources`}{(nextPageToken || visibleResources.length < sortedAndFilteredResources.length) && ' · scroll to load more'}</>}
+              {(resourceTotal != null || nextPageToken || currentPage > 0 || search.trim()) && <div aria-live="polite" style={{ minHeight: '38px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', fontSize: '0.78rem', opacity: 0.78 }}>
+                <Button size="small" appearance="subtle" disabled={loading || currentPage === 0} onClick={() => void loadData(currentPage - 1, pageTokens[currentPage - 1])}>Previous</Button>
+                <span>{resourceTotal != null ? `${resourceTotal} resources · ` : ''}Page {currentPage + 1}{totalPages ? ` of ${totalPages}` : ''}</span>
+                <Button size="small" appearance="subtle" disabled={loading || (search.trim() ? currentPage >= (totalPages || 1) - 1 : !nextPageToken)} onClick={() => search.trim() ? setCurrentPage(page => page + 1) : void loadData(currentPage + 1, nextPageToken)}>Next</Button>
               </div>}
               </>
             )}
