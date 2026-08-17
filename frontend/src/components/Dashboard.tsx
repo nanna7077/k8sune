@@ -506,6 +506,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
   const [activeView, setActiveView] = useState('overview');
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [contextFilter, setContextFilter] = useState('');
   const [namespaceFilter, setNamespaceFilter] = useState('');
   const [panels, setPanels] = useState<PanelState[]>([]);
@@ -561,6 +562,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
   const [resourceTotal, setResourceTotal] = useState<number | null>(null);
   const [currentPage, setCurrentPage] = useState(0);
   const [pageTokens, setPageTokens] = useState<(string | null)[]>([null]);
+  const listRequestSequence = useRef(0);
   const [metrics, setMetrics] = useState<Record<string, any>>({});
   const [crds, setCrds] = useState<CRD[]>([]);
   const [pinnedCustomKinds, setPinnedCustomKinds] = useState<string[]>(() => {
@@ -981,6 +983,8 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
 
   const loadData = async (pageIndex = 0, explicitPageToken?: string | null) => {
     if (!context) return;
+    const requestSequence = ++listRequestSequence.current;
+    const isCurrentRequest = () => requestSequence === listRequestSequence.current;
     setLoading(true);
     setViewError(null);
     try {
@@ -1024,7 +1028,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
          const data = await apiFetch<{ items: CRD[] }>(`/api/crds/${context}`);
          setCrds(data.items);
       } else {
-        const normalizedSearch = search.trim().toLowerCase();
+        const normalizedSearch = debouncedSearch.trim().toLowerCase();
         if (normalizedSearch) {
           // Kubernetes continuation tokens are server-side cursors. To make a
           // substring search complete, read the cursor chain in the background,
@@ -1034,9 +1038,11 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
           do {
             const data = await requestListPage(500, token);
             if (!data) break;
+            if (!isCurrentRequest()) return;
             allItems.push(...data.items);
             token = data.continue || null;
           } while (token);
+          if (!isCurrentRequest()) return;
           const matches = allItems.filter(item => item.name.toLowerCase().includes(normalizedSearch) || item.namespace?.toLowerCase().includes(normalizedSearch) || item.internal_ip?.includes(normalizedSearch) || item.external_ip?.includes(normalizedSearch) || item.os?.toLowerCase().includes(normalizedSearch));
           setResources(matches);
           setResourceTotal(matches.length);
@@ -1044,16 +1050,34 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
           setPageTokens([null]);
           setNextPageToken(null);
         } else {
-          const token = pageIndex === 0 ? null : explicitPageToken ?? pageTokens[pageIndex];
+          const discoveredTokens = pageIndex === 0 ? [null] : [...pageTokens];
+          let token = pageIndex === 0 ? null : explicitPageToken ?? discoveredTokens[pageIndex];
+          if (pageIndex > 0 && !token) {
+            let cursorIndex = discoveredTokens.length - 1;
+            let cursorToken = discoveredTokens[cursorIndex];
+            while (cursorIndex < pageIndex) {
+              if (!cursorToken) return;
+              const cursorPage = await requestListPage(20, cursorToken);
+              if (!cursorPage || !isCurrentRequest()) return;
+              cursorIndex += 1;
+              cursorToken = cursorPage.continue || null;
+              discoveredTokens[cursorIndex] = cursorToken;
+            }
+            token = discoveredTokens[pageIndex];
+          }
           if (pageIndex > 0 && !token) return;
           const data = await requestListPage(20, token);
           if (!data) return;
+          if (!isCurrentRequest()) return;
           setResources(data.items);
           setNextPageToken(data.continue || null);
-          setResourceTotal(previous => pageIndex === 0 ? data.total ?? null : previous);
+          setResourceTotal(previous => {
+            if (pageIndex === 0) return data.total ?? (!data.continue ? data.items.length : null);
+            return previous ?? (!data.continue ? pageIndex * 20 + data.items.length : null);
+          });
           setCurrentPage(pageIndex);
-          setPageTokens(previous => {
-            const tokens = pageIndex === 0 ? [null] : [...previous];
+          setPageTokens(() => {
+            const tokens = pageIndex === 0 ? [null] : discoveredTokens;
             tokens[pageIndex] = token;
             if (data.continue) tokens[pageIndex + 1] = data.continue;
             else tokens.length = pageIndex + 1;
@@ -1062,6 +1086,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
         }
       }
       
+      if (!isCurrentRequest()) return;
       if (activeView === 'pods') {
         setupWatch();
       } else {
@@ -1072,6 +1097,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
       console.error(e);
       const message = e instanceof Error ? e.message : String(e);
       // Resource/API validation errors do not mean the entire cluster is down.
+      if (!isCurrentRequest()) return;
       if (activeView.startsWith('custom_')) {
         setIsReachable(true);
         setViewError(message);
@@ -1079,7 +1105,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
         setIsReachable(false);
       }
     } finally {
-      setLoading(false);
+      if (isCurrentRequest()) setLoading(false);
     }
   };
 
@@ -1322,9 +1348,11 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
                   const newRes = [...currentResources];
                   newRes[index] = pod;
                   return newRes;
-                } else {
-                  return [...currentResources, pod];
                 }
+                // The watch is only allowed to refresh rows already present
+                // on the current server page. New Pods belong to whichever
+                // page Kubernetes returns after the next refresh.
+                return currentResources;
               } else if (update.type === 'DELETED') {
                 return currentResources.filter(p => p.name !== pod.name || p.namespace !== pod.namespace);
               }
@@ -1548,7 +1576,8 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
   }, []);
 
   useEffect(() => {
-    loadData();
+    if (selectedResource) listRequestSequence.current += 1;
+    else loadData(0);
     fetchNamespaces();
     fetchClusterSettings();
     if (crds.length === 0 && context) {
@@ -1562,7 +1591,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
       if (eventSourceRef.current) eventSourceRef.current.close();
       clearInterval(metricsInterval);
     };
-  }, [activeView, context, selectedResource, selectedNamespaces]);
+  }, [activeView, context, selectedResource, selectedNamespaces, debouncedSearch, crds.length]);
 
   useEffect(() => {
       if (selectedResource) {
@@ -1606,7 +1635,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
         const matchesNamespace = isAllNamespaces || (r.namespace && selectedNamespaces.includes(r.namespace)) || !r.namespace;
         if (!matchesNamespace) return false;
 
-        const searchLower = search.toLowerCase();
+        const searchLower = debouncedSearch.toLowerCase();
         return (
             r.name.toLowerCase().includes(searchLower) ||
             (r.namespace && r.namespace.toLowerCase().includes(searchLower)) ||
@@ -1635,17 +1664,24 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
         if (valA > valB) return sortState.direction === 'ascending' ? 1 : -1;
         return 0;
     });
-  }, [resources, search, sortState, selectedNamespaces]);
+  }, [resources, debouncedSearch, sortState, selectedNamespaces]);
 
   const visibleResources = useMemo(() => {
-    if (!search.trim()) return sortedAndFilteredResources;
+    if (!debouncedSearch) return sortedAndFilteredResources;
     const start = currentPage * 20;
     return sortedAndFilteredResources.slice(start, start + 20);
-  }, [sortedAndFilteredResources, search, currentPage]);
+  }, [sortedAndFilteredResources, debouncedSearch, currentPage]);
 
-  const totalPages = search.trim()
+  const totalPages = debouncedSearch
     ? Math.max(1, Math.ceil(sortedAndFilteredResources.length / 20))
     : resourceTotal != null ? Math.max(1, Math.ceil(resourceTotal / 20)) : null;
+  const reachablePageCount = debouncedSearch ? (totalPages || 1) : Math.max(1, totalPages || pageTokens.length);
+  const paginationPages = useMemo(() => {
+    if (reachablePageCount <= 7) return Array.from({ length: reachablePageCount }, (_, index) => index);
+    return Array.from(new Set([0, currentPage - 1, currentPage, currentPage + 1, reachablePageCount - 1]))
+      .filter(index => index >= 0 && index < reachablePageCount)
+      .sort((a, b) => a - b);
+  }, [reachablePageCount, currentPage]);
 
   useEffect(() => {
     setNextPageToken(null);
@@ -1655,8 +1691,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
   }, [activeView, selectedNamespaces, context]);
 
   useEffect(() => {
-    if (selectedResource || ['overview', 'rbac', 'network', 'persistentvolumes', 'helm', 'settings', 'crds_list'].includes(activeView)) return;
-    const timer = window.setTimeout(() => { void loadData(0); }, 250);
+    const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 250);
     return () => window.clearTimeout(timer);
   }, [search]);
 
@@ -3457,11 +3492,19 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
                   </div>
                 )}
               </div>
-              {(resourceTotal != null || nextPageToken || currentPage > 0 || search.trim()) && <div aria-live="polite" style={{ minHeight: '38px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', fontSize: '0.78rem', opacity: 0.78 }}>
-                <Button size="small" appearance="subtle" disabled={loading || currentPage === 0} onClick={() => void loadData(currentPage - 1, pageTokens[currentPage - 1])}>Previous</Button>
-                <span>{resourceTotal != null ? `${resourceTotal} resources · ` : ''}Page {currentPage + 1}{totalPages ? ` of ${totalPages}` : ''}</span>
-                <Button size="small" appearance="subtle" disabled={loading || (search.trim() ? currentPage >= (totalPages || 1) - 1 : !nextPageToken)} onClick={() => search.trim() ? setCurrentPage(page => page + 1) : void loadData(currentPage + 1, nextPageToken)}>Next</Button>
-              </div>}
+              <div aria-live="polite" style={{ minHeight: '38px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', fontSize: '0.78rem', opacity: 0.78 }}>
+                {loading && <Spinner size="tiny" label="Loading page" />}
+                <Button size="small" appearance="subtle" disabled={loading || currentPage === 0} onClick={() => debouncedSearch ? setCurrentPage(page => page - 1) : void loadData(currentPage - 1, pageTokens[currentPage - 1])}>Previous</Button>
+                {resourceTotal != null && <span>{resourceTotal} resources</span>}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  {paginationPages.map((pageIndex, position) => <span key={pageIndex} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    {position > 0 && pageIndex - paginationPages[position - 1] > 1 && <span>…</span>}
+                    <Button size="small" appearance={pageIndex === currentPage ? 'primary' : 'subtle'} disabled={loading} aria-label={`Page ${pageIndex + 1}`} onClick={() => debouncedSearch ? setCurrentPage(pageIndex) : void loadData(pageIndex, pageTokens[pageIndex])}>{pageIndex + 1}</Button>
+                  </span>)}
+                </div>
+                {totalPages && <span>of {totalPages}</span>}
+                <Button size="small" appearance="subtle" disabled={loading || (debouncedSearch ? currentPage >= (totalPages || 1) - 1 : !nextPageToken)} onClick={() => debouncedSearch ? setCurrentPage(page => page + 1) : void loadData(currentPage + 1, nextPageToken)}>Next</Button>
+              </div>
               </>
             )}
           </div>

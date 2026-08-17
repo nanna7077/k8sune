@@ -260,11 +260,11 @@ async def get_overview(context_name: str):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/resources/{context_name}/nodes")
-async def get_nodes(context_name: str):
+async def get_nodes(context_name: str, limit: int = Query(20, ge=1, le=500), continue_token: str | None = Query(None, alias="continue")):
     try:
         client = await cluster_manager.get_client(context_name)
         v1 = CoreV1Api(client)
-        nodes = await v1.list_node()
+        nodes = await v1.list_node(limit=limit, _continue=continue_token)
         pods = await v1.list_pod_for_all_namespaces()
 
         # Pre-parse CPU/Mem helper functions (re-using from overview logic)
@@ -311,7 +311,7 @@ async def get_nodes(context_name: str):
                 "pod_usage": {"current": stats["pods"], "total": capacity_pods}
             })
 
-        return {"items": items}
+        return {"items": items, **page_metadata(nodes, len(items))}
     except Exception as e:
         import traceback
         traceback.print_exc()
