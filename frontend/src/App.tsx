@@ -1,6 +1,8 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { 
-  FluentProvider
+  Button,
+  FluentProvider,
+  Spinner,
 } from "@fluentui/react-components";
 import { ACCENT_OPTIONS, getK8suneTheme } from './themes/tokens';
 import { useStore } from './store/useStore';
@@ -10,6 +12,7 @@ import { YamlEditor } from './components/YamlEditor';
 import { TitleBar } from './components/TitleBar';
 import { WindowResizer } from './components/WindowResizer';
 import { NodeCommandRunner } from './components/NodeCommandRunner';
+import { waitForBackend } from './utils/api';
 
 const appContentStyle = {
   marginTop: '32px',
@@ -26,6 +29,9 @@ function App() {
     accent,
   } = useStore();
   const theme = useMemo(() => getK8suneTheme(accent), [accent]);
+  const [backendReady, setBackendReady] = useState(false);
+  const [backendError, setBackendError] = useState<string | null>(null);
+  const [startupAttempt, setStartupAttempt] = useState(0);
 
   useEffect(() => {
     const color = ACCENT_OPTIONS.find(option => option.id === accent)?.color ?? ACCENT_OPTIONS[0].color;
@@ -33,6 +39,24 @@ function App() {
     document.documentElement.style.setProperty('--accent-bg', `${color}1f`);
     document.documentElement.style.setProperty('--accent-border', `${color}52`);
   }, [accent]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setBackendReady(false);
+    setBackendError(null);
+
+    void waitForBackend()
+      .then(() => {
+        if (!cancelled) setBackendReady(true);
+      })
+      .catch(() => {
+        if (!cancelled) setBackendError('The backend did not finish starting.');
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [startupAttempt]);
 
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -56,6 +80,53 @@ function App() {
   const resourceType = urlParams.get('resourceType') || '';
   const view = urlParams.get('view') || '';
   const resourceNamespace = urlParams.get('namespace') || undefined;
+
+  if (!backendReady) {
+    return (
+      <FluentProvider theme={theme} style={{ height: '100%' }}>
+        <TitleBar />
+        <WindowResizer />
+        <main
+          style={{
+            ...appContentStyle,
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'var(--app-gradient)',
+          }}
+        >
+          <section
+            aria-live="polite"
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '16px',
+              color: 'var(--text-h)',
+              textAlign: 'center',
+            }}
+          >
+            <img
+              src="/sprites/k8sune-run.png"
+              alt=""
+              aria-hidden="true"
+              style={{ width: '112px', height: '112px', objectFit: 'contain', animation: 'k8sune-runner 900ms ease-in-out infinite alternate' }}
+            />
+            {backendError ? (
+              <>
+                <div>
+                  <strong style={{ display: 'block', fontSize: '16px', marginBottom: '6px' }}>Couldn’t start k8sune</strong>
+                  <span style={{ color: 'var(--text-muted)' }}>{backendError}</span>
+                </div>
+                <Button appearance="primary" onClick={() => setStartupAttempt(attempt => attempt + 1)}>Try again</Button>
+              </>
+            ) : (
+              <Spinner label="Starting k8sune…" labelPosition="below" />
+            )}
+          </section>
+        </main>
+      </FluentProvider>
+    );
+  }
 
   if (section === 'logs' && context && pod) {
     return (

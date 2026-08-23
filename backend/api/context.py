@@ -7,18 +7,7 @@ router = APIRouter()
 
 @router.get("/contexts")
 async def get_contexts():
-    result = await cluster_manager.list_contexts()
-    config_path = cluster_manager._resolve_kubeconfig_path()
-    if not config_path:
-        return {**result, "details": []}
-    with open(config_path, "r") as file:
-        config_data = yaml.safe_load(file) or {}
-    clusters = {item.get("name"): item.get("cluster", {}) for item in config_data.get("clusters", [])}
-    details = []
-    for item in config_data.get("contexts", []):
-        name, value = item.get("name"), item.get("context", {})
-        details.append({"name": name, "cluster": value.get("cluster"), "server": clusters.get(value.get("cluster"), {}).get("server"), "namespace": value.get("namespace") or "default", "user": value.get("user"), "favorite": bool(cluster_manager.get_cluster_setting(name, "favorite", False))})
-    return {**result, "details": details}
+    return await cluster_manager.list_contexts()
 
 @router.post("/contexts/verify/{context_name}")
 async def verify_context(context_name: str):
@@ -50,8 +39,9 @@ class ContextUpdate(BaseModel):
     namespace: str | None = None
     server: str | None = None
 
-def _write_kubeconfig(data):
-    path = cluster_manager._resolve_kubeconfig_path()
+def _write_kubeconfig(data, context_name=None):
+    path = cluster_manager.get_context_source(context_name) if context_name else None
+    path = path or cluster_manager._resolve_kubeconfig_path()
     if not path:
         raise HTTPException(status_code=400, detail="No kubeconfig file is configured")
     with open(path, "w") as file:
@@ -60,7 +50,7 @@ def _write_kubeconfig(data):
 
 @router.put("/contexts/{context_name}")
 async def update_context(context_name: str, update: ContextUpdate):
-    path = cluster_manager._resolve_kubeconfig_path()
+    path = cluster_manager.get_context_source(context_name) or cluster_manager._resolve_kubeconfig_path()
     if not path:
         raise HTTPException(status_code=400, detail="No kubeconfig file is configured")
     with open(path, "r") as file:
@@ -75,13 +65,13 @@ async def update_context(context_name: str, update: ContextUpdate):
         cluster = next((entry for entry in data.get("clusters", []) if entry.get("name") == cluster_name), None)
         if cluster:
             cluster.setdefault("cluster", {})["server"] = update.server
-    _write_kubeconfig(data)
+    _write_kubeconfig(data, context_name)
     await cluster_manager.load_kubeconfig()
     return {"status": "ok"}
 
 @router.delete("/contexts/{context_name}")
 async def delete_context(context_name: str):
-    path = cluster_manager._resolve_kubeconfig_path()
+    path = cluster_manager.get_context_source(context_name) or cluster_manager._resolve_kubeconfig_path()
     if not path:
         raise HTTPException(status_code=400, detail="No kubeconfig file is configured")
     with open(path, "r") as file:
@@ -92,7 +82,7 @@ async def delete_context(context_name: str):
         raise HTTPException(status_code=404, detail="Context not found")
     if data.get("current-context") == context_name:
         data["current-context"] = data["contexts"][0].get("name") if data["contexts"] else ""
-    _write_kubeconfig(data)
+    _write_kubeconfig(data, context_name)
     await cluster_manager.load_kubeconfig()
     return {"status": "ok"}
 

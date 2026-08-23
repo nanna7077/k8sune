@@ -680,12 +680,14 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
 
   const fetchContexts = async () => {
     try {
-      const data = await apiFetch<{ contexts: string[], active_context: string, details?: any[] }>('/api/contexts');
+      const data = await apiFetch<{ contexts: string[], active_context: string, details?: any[], discovering?: boolean }>('/api/contexts');
       setContexts(data.contexts);
       setContextDetails(data.details || []);
-      if (!activeContext) setActiveContext(data.active_context);
+      if (!activeContext && data.active_context) setActiveContext(data.active_context);
+      return Boolean(data.discovering);
     } catch (e) {
       console.error(e);
+      return false;
     }
   };
 
@@ -1565,7 +1567,17 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
   };
 
   useEffect(() => {
-    fetchContexts();
+    let cancelled = false;
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    const refreshWhileDiscovering = async () => {
+      const discovering = await fetchContexts();
+      if (!cancelled && discovering) refreshTimer = setTimeout(refreshWhileDiscovering, 750);
+    };
+    void refreshWhileDiscovering();
+    return () => {
+      cancelled = true;
+      if (refreshTimer) clearTimeout(refreshTimer);
+    };
   }, []);
 
   useEffect(() => {

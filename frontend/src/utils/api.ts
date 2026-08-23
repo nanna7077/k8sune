@@ -2,6 +2,27 @@ import { invoke } from '@tauri-apps/api/core';
 
 let backendPort: number | null = null;
 
+/**
+ * Wait until the spawned Python API is accepting requests. `get_backend_port`
+ * only tells us that a port was allocated; this additionally verifies that
+ * FastAPI has completed startup.
+ */
+export const waitForBackend = async (): Promise<void> => {
+  let attempts = 0;
+
+  while (attempts < 150) {
+    try {
+      await invoke<string>('ping_backend');
+      return;
+    } catch (_) {
+      await new Promise(resolve => setTimeout(resolve, 300));
+      attempts++;
+    }
+  }
+
+  throw new Error('Backend did not become ready');
+};
+
 export const getBackendPort = async (): Promise<number> => {
   if (backendPort !== null && backendPort !== 0) return backendPort;
   

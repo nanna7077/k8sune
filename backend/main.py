@@ -33,8 +33,10 @@ from backend.cluster.manager import cluster_manager
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Attempt to load kubeconfig on startup
-    await cluster_manager.load_kubeconfig()
+    # Contexts are discovered and verified concurrently in the background.
+    # The API can become ready immediately; reachable contexts are published as
+    # each check completes.
+    await cluster_manager.start_discovery()
     yield
     # Cleanup active port forwards
     cleanup_all_portforwards()
