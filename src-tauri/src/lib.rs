@@ -127,16 +127,31 @@ pub fn run() {
 
       #[cfg(not(debug_assertions))]
       let backend_dir = {
-          let resource_dir = app.path().resource_dir()?;
-          let bundled_backend = resource_dir.join("backend");
-          let executable_backend = std::env::current_exe()?
+          let executable = std::env::current_exe()?;
+          let executable_dir = executable.parent().ok_or_else(|| {
+              std::io::Error::new(std::io::ErrorKind::NotFound, "Application executable has no parent directory")
+          })?;
+          let executable_backend = executable_dir.join("backend");
+
+          // Tauri's resource_dir resolver can return `unknown path` during
+          // macOS setup. Use the stable .app layout instead:
+          // Contents/MacOS/k8sune -> Contents/Resources/backend.
+          #[cfg(target_os = "macos")]
+          let bundled_backend = executable_dir
               .parent()
-              .map(|dir| dir.join("backend"));
+              .map(|contents| contents.join("Resources/backend"))
+              .ok_or_else(|| std::io::Error::new(
+                  std::io::ErrorKind::NotFound,
+                  "macOS application bundle has no Contents directory",
+              ))?;
+
+          #[cfg(not(target_os = "macos"))]
+          let bundled_backend = app.path().resource_dir()?.join("backend");
 
           // The Homebrew formula ships `backend` beside the binary. Native macOS
           // bundles ship it in `Contents/Resources/backend`.
-          if let Some(path) = executable_backend.filter(|path| path.join("main.py").is_file()) {
-              path
+          if executable_backend.join("main.py").is_file() {
+              executable_backend
           } else if bundled_backend.join("main.py").is_file() {
               bundled_backend
           } else {
