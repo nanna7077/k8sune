@@ -5,6 +5,7 @@ from kubernetes_asyncio.client import CoreV1Api, NetworkingV1Api
 import asyncio
 import re
 import uuid
+from typing import Optional
 
 router = APIRouter()
 
@@ -24,10 +25,10 @@ async def network_overview(context_name: str):
 
 class ClusterProbe(BaseModel):
     host: str = Field(min_length=1, max_length=253)
-    port: int | None = Field(default=None, ge=1, le=65535)
+    port: Optional[int] = Field(default=None, ge=1, le=65535)
     timeout_seconds: float = Field(default=5, ge=1, le=30)
     namespace: str = Field(default='default', min_length=1, max_length=63)
-    source_node: str | None = Field(default=None, max_length=253)
+    source_node: Optional[str] = Field(default=None, max_length=253)
 
 def _safe_host(value: str) -> str:
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.:-]*', value):

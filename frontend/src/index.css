@@ -70,12 +70,6 @@ body {
   width: 112px;
   height: 112px;
   background: url('/sprites/k8sune-run.png') center / contain no-repeat;
-  animation: k8sune-runner 900ms ease-in-out infinite alternate;
-}
-
-@keyframes k8sune-runner {
-  from { transform: translateX(-8px) scale(0.94); opacity: 0.72; }
-  to { transform: translateX(8px) scale(1); opacity: 1; }
 }
 
 h1,

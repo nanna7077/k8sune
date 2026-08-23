@@ -5,3 +5,6 @@ kubernetes-asyncio
 pyyaml
 websockets
 sse-starlette
+# macOS's system Python links against LibreSSL; urllib3 2 emits compatibility
+# warnings there while urllib3 1.26 remains supported by Kubernetes clients.
+urllib3<2

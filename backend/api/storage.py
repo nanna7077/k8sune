@@ -1,5 +1,6 @@
 import asyncio
 import re
+from typing import Optional
 
 from fastapi import APIRouter
 from kubernetes_asyncio.client import CoreV1Api, StorageV1Api, CustomObjectsApi
@@ -9,7 +10,7 @@ from backend.cluster.manager import cluster_manager
 router = APIRouter()
 
 
-def quantity_to_bytes(value: str | None) -> int:
+def quantity_to_bytes(value: Optional[str]) -> int:
     """Best-effort conversion for Kubernetes storage quantities."""
     if not value:
         return 0

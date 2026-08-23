@@ -96,6 +96,22 @@ jobs:
           fi
           PYTHONPATH=backend/libs python3 -c "import fastapi, kubernetes, kubernetes_asyncio, sse_starlette, uvicorn, websockets, yaml"
 
+      - name: Verify macOS backend starts with Python 3.9
+        if: matrix.os == 'macos-latest'
+        run: |
+          set -euo pipefail
+          PYTHONPATH=backend/libs python3 backend/main.py > backend-startup.log 2>&1 &
+          BACKEND_PID=$!
+          cleanup() { kill "$BACKEND_PID" 2>/dev/null || true; wait "$BACKEND_PID" 2>/dev/null || true; }
+          trap cleanup EXIT
+          for _ in $(seq 1 50); do
+            if grep -q '^BACKEND_PORT=' backend-startup.log; then break; fi
+            sleep 0.1
+          done
+          PORT=$(sed -n 's/^BACKEND_PORT=//p' backend-startup.log | head -n 1)
+          test -n "$PORT"
+          curl --fail --silent --show-error "http://127.0.0.1:$PORT/ping" | grep -q 'pong'
+
       - name: Derive package version from release tag
         env:
           RELEASE_TAG: ${{ github.ref_name }}

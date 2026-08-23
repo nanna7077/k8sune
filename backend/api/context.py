@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException
 from backend.cluster.manager import cluster_manager
 from kubernetes_asyncio.client import CoreV1Api
 import yaml
+from typing import Optional
 
 router = APIRouter()
 
@@ -36,8 +37,8 @@ async def import_kubeconfig(req: ImportRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 class ContextUpdate(BaseModel):
-    namespace: str | None = None
-    server: str | None = None
+    namespace: Optional[str] = None
+    server: Optional[str] = None
 
 def _write_kubeconfig(data, context_name=None):
     path = cluster_manager.get_context_source(context_name) if context_name else None

@@ -109,7 +109,7 @@ function App() {
               src="/sprites/k8sune-run.png"
               alt=""
               aria-hidden="true"
-              style={{ width: '112px', height: '112px', objectFit: 'contain', animation: 'k8sune-runner 900ms ease-in-out infinite alternate' }}
+              style={{ width: '112px', height: '112px', objectFit: 'contain' }}
             />
             {backendError ? (
               <>

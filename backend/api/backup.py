@@ -9,6 +9,7 @@ import zipfile
 from fastapi import APIRouter, Body, HTTPException
 from kubernetes_asyncio import client, utils
 import yaml
+from typing import Optional
 from backend.cluster.manager import cluster_manager
 from backend.api.yaml_editor import patch_resource
 
@@ -49,7 +50,7 @@ def prune_manifest(manifest: dict) -> dict:
     return manifest
 
 
-async def namespace_manifests(context_name: str, namespace: str, selected: dict | None = None):
+async def namespace_manifests(context_name: str, namespace: str, selected: Optional[dict] = None):
     api_client = await cluster_manager.get_client(context_name)
     apis = {
         "core": client.CoreV1Api(api_client), "apps": client.AppsV1Api(api_client),

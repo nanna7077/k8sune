@@ -8,6 +8,7 @@ import base64
 import json
 import re
 import time
+from typing import Optional
 
 router = APIRouter()
 
@@ -260,7 +261,7 @@ async def get_overview(context_name: str):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/resources/{context_name}/nodes")
-async def get_nodes(context_name: str, limit: int = Query(20, ge=1, le=500), continue_token: str | None = Query(None, alias="continue")):
+async def get_nodes(context_name: str, limit: int = Query(20, ge=1, le=500), continue_token: Optional[str] = Query(None, alias="continue")):
     try:
         client = await cluster_manager.get_client(context_name)
         v1 = CoreV1Api(client)
@@ -318,7 +319,7 @@ async def get_nodes(context_name: str, limit: int = Query(20, ge=1, le=500), con
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/resources/{context_name}/pods")
-async def get_pods(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: str | None = Query(None, alias="continue")):
+async def get_pods(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: Optional[str] = Query(None, alias="continue")):
     try:
         client = await cluster_manager.get_client(context_name)
         v1 = CoreV1Api(client)
@@ -336,7 +337,7 @@ async def get_pods(context_name: str, namespace: str = None, limit: int = Query(
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/resources/{context_name}/deployments")
-async def get_deployments(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: str | None = Query(None, alias="continue")):
+async def get_deployments(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: Optional[str] = Query(None, alias="continue")):
     try:
         client = await cluster_manager.get_client(context_name)
         apps_v1 = AppsV1Api(client)
@@ -362,7 +363,7 @@ async def get_deployments(context_name: str, namespace: str = None, limit: int =
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/resources/{context_name}/namespaces")
-async def get_namespaces(context_name: str, limit: int = Query(100, ge=1, le=500), continue_token: str | None = Query(None, alias="continue")):
+async def get_namespaces(context_name: str, limit: int = Query(100, ge=1, le=500), continue_token: Optional[str] = Query(None, alias="continue")):
     try:
         client = await cluster_manager.get_client(context_name)
         v1 = CoreV1Api(client)
@@ -372,7 +373,7 @@ async def get_namespaces(context_name: str, limit: int = Query(100, ge=1, le=500
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/resources/{context_name}/configmaps")
-async def get_configmaps(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: str | None = Query(None, alias="continue")):
+async def get_configmaps(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: Optional[str] = Query(None, alias="continue")):
     try:
         client = await cluster_manager.get_client(context_name)
         v1 = CoreV1Api(client)
@@ -388,7 +389,7 @@ async def get_configmaps(context_name: str, namespace: str = None, limit: int = 
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/resources/{context_name}/secrets")
-async def get_secrets(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: str | None = Query(None, alias="continue")):
+async def get_secrets(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: Optional[str] = Query(None, alias="continue")):
     try:
         client = await cluster_manager.get_client(context_name)
         v1 = CoreV1Api(client)
@@ -527,7 +528,7 @@ async def get_pvc(context_name: str, namespace: str = None):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/resources/{context_name}/generic/{group}/{version}/{plural}")
-async def get_generic_resources(context_name: str, group: str, version: str, plural: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: str | None = Query(None, alias="continue")):
+async def get_generic_resources(context_name: str, group: str, version: str, plural: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: Optional[str] = Query(None, alias="continue")):
     try:
         client = await cluster_manager.get_client(context_name)
         custom = CustomObjectsApi(client)
@@ -926,7 +927,7 @@ async def get_pod_details(context_name: str, namespace: str, pod_name: str):
 
 
 @router.get("/resources/{context_name}/statefulsets")
-async def get_statefulsets(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: str | None = Query(None, alias="continue")):
+async def get_statefulsets(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: Optional[str] = Query(None, alias="continue")):
     try:
         client = await cluster_manager.get_client(context_name)
         apps_v1 = AppsV1Api(client)
@@ -940,7 +941,7 @@ async def get_statefulsets(context_name: str, namespace: str = None, limit: int 
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/resources/{context_name}/daemonsets")
-async def get_daemonsets(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: str | None = Query(None, alias="continue")):
+async def get_daemonsets(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: Optional[str] = Query(None, alias="continue")):
     try:
         client = await cluster_manager.get_client(context_name)
         apps_v1 = AppsV1Api(client)
@@ -953,7 +954,7 @@ async def get_daemonsets(context_name: str, namespace: str = None, limit: int = 
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/resources/{context_name}/cronjobs")
-async def get_cronjobs(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: str | None = Query(None, alias="continue")):
+async def get_cronjobs(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: Optional[str] = Query(None, alias="continue")):
     try:
         client = await cluster_manager.get_client(context_name)
         batch = BatchV1Api(client)
@@ -1136,7 +1137,7 @@ async def scale_deployment(context_name: str, namespace: str, name: str, replica
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/resources/{context_name}/services")
-async def get_services(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: str | None = Query(None, alias="continue")):
+async def get_services(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: Optional[str] = Query(None, alias="continue")):
     try:
         client = await cluster_manager.get_client(context_name)
         v1 = CoreV1Api(client)
@@ -1160,7 +1161,7 @@ async def get_services(context_name: str, namespace: str = None, limit: int = Qu
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/resources/{context_name}/ingresses")
-async def get_ingresses(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: str | None = Query(None, alias="continue")):
+async def get_ingresses(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: Optional[str] = Query(None, alias="continue")):
     try:
         client = await cluster_manager.get_client(context_name)
         networking_v1 = NetworkingV1Api(client)
@@ -1182,7 +1183,7 @@ async def get_ingresses(context_name: str, namespace: str = None, limit: int = Q
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/resources/{context_name}/replicasets")
-async def get_replicasets(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: str | None = Query(None, alias="continue")):
+async def get_replicasets(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: Optional[str] = Query(None, alias="continue")):
     try:
         client = await cluster_manager.get_client(context_name)
         apps_v1 = AppsV1Api(client)
@@ -1205,7 +1206,7 @@ async def get_replicasets(context_name: str, namespace: str = None, limit: int =
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/resources/{context_name}/jobs")
-async def get_jobs(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: str | None = Query(None, alias="continue")):
+async def get_jobs(context_name: str, namespace: str = None, limit: int = Query(100, ge=1, le=500), continue_token: Optional[str] = Query(None, alias="continue")):
     try:
         client = await cluster_manager.get_client(context_name)
         batch_v1 = BatchV1Api(client)
