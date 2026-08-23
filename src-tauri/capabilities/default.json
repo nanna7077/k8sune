@@ -27,14 +27,9 @@
     "core:window:allow-start-resize-dragging",
     "dialog:allow-save",
     "dialog:allow-open",
+    "fs:allow-read-file",
     "fs:allow-write-file",
-    {
-      "identifier": "fs:allow-read-text-file",
-      "allow": [
-        {
-          "path": "$HOME/**"
-        }
-      ]
-    }
+    "fs:allow-read-text-file",
+    "fs:allow-write-text-file"
   ]
 }

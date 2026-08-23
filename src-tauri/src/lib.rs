@@ -101,8 +101,15 @@ pub fn run() {
   tauri::Builder::default()
     .manage(port_state.clone())
     .setup(move |app| {
-      app.handle().plugin(tauri_plugin_dialog::init())?;
-      app.handle().plugin(tauri_plugin_fs::init())?;
+      // Plugin registration must not make the native application abort before
+      // it can render an actionable error. In particular, some macOS launch
+      // environments cannot resolve an optional filesystem scope at setup.
+      if let Err(error) = app.handle().plugin(tauri_plugin_dialog::init()) {
+          eprintln!("Dialog plugin setup failed: {error}");
+      }
+      if let Err(error) = app.handle().plugin(tauri_plugin_fs::init()) {
+          eprintln!("Filesystem plugin setup failed: {error}");
+      }
 
       // Explicitly set the window icon
       let main_window = app.get_webview_window("main").unwrap();
@@ -127,26 +134,42 @@ pub fn run() {
 
       #[cfg(not(debug_assertions))]
       let backend_dir = {
-          let executable = std::env::current_exe()?;
-          let executable_dir = executable.parent().ok_or_else(|| {
-              std::io::Error::new(std::io::ErrorKind::NotFound, "Application executable has no parent directory")
-          })?;
+          let executable = match std::env::current_exe() {
+              Ok(path) => path,
+              Err(error) => {
+                  eprintln!("Could not locate the application executable: {error}");
+                  return Ok(());
+              }
+          };
+          let executable_dir = match executable.parent() {
+              Some(path) => path,
+              None => {
+                  eprintln!("Application executable has no parent directory");
+                  return Ok(());
+              }
+          };
           let executable_backend = executable_dir.join("backend");
 
           // Tauri's resource_dir resolver can return `unknown path` during
           // macOS setup. Use the stable .app layout instead:
           // Contents/MacOS/k8sune -> Contents/Resources/backend.
           #[cfg(target_os = "macos")]
-          let bundled_backend = executable_dir
-              .parent()
-              .map(|contents| contents.join("Resources/backend"))
-              .ok_or_else(|| std::io::Error::new(
-                  std::io::ErrorKind::NotFound,
-                  "macOS application bundle has no Contents directory",
-              ))?;
+          let bundled_backend = match executable_dir.parent() {
+              Some(contents) => contents.join("Resources/backend"),
+              None => {
+                  eprintln!("macOS application bundle has no Contents directory");
+                  return Ok(());
+              }
+          };
 
           #[cfg(not(target_os = "macos"))]
-          let bundled_backend = app.path().resource_dir()?.join("backend");
+          let bundled_backend = match app.path().resource_dir() {
+              Ok(path) => path.join("backend"),
+              Err(error) => {
+                  eprintln!("Could not resolve application resources: {error}");
+                  return Ok(());
+              }
+          };
 
           // The Homebrew formula ships `backend` beside the binary. Native macOS
           // bundles ship it in `Contents/Resources/backend`.
@@ -155,21 +178,17 @@ pub fn run() {
           } else if bundled_backend.join("main.py").is_file() {
               bundled_backend
           } else {
-              return Err(std::io::Error::new(
-                  std::io::ErrorKind::NotFound,
-                  format!(
-                      "Backend was not found beside the executable or at {}. Rebuild the application so the backend directory is included in Resources.",
-                      bundled_backend.display(),
-                  ),
-              ).into());
+              eprintln!(
+                  "Backend was not found beside the executable or at {}. Rebuild the application so the backend directory is included in Resources.",
+                  bundled_backend.display(),
+              );
+              return Ok(());
           }
       };
 
       if !backend_dir.join("main.py").is_file() {
-          return Err(std::io::Error::new(
-              std::io::ErrorKind::NotFound,
-              format!("Backend entrypoint was not found at {}", backend_dir.join("main.py").display()),
-          ).into());
+          eprintln!("Backend entrypoint was not found at {}", backend_dir.join("main.py").display());
+          return Ok(());
       }
       let project_root = backend_dir.parent().unwrap_or(&backend_dir).to_path_buf();
 
