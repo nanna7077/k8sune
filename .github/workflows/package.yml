@@ -280,7 +280,7 @@ jobs:
 
             def install
               bin.install "k8sune"
-              bin.install "backend"
+              libexec.install "backend"
             end
           end
           EOF2

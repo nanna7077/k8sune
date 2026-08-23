@@ -141,6 +141,10 @@ pub fn run() {
                   return Ok(());
               }
           };
+          // Homebrew exposes the formula binary through /opt/homebrew/bin.
+          // Follow that symlink before looking for its sibling `backend/`
+          // directory in the Cellar installation.
+          let executable = executable.canonicalize().unwrap_or(executable);
           let executable_dir = match executable.parent() {
               Some(path) => path,
               None => {
@@ -149,6 +153,9 @@ pub fn run() {
               }
           };
           let executable_backend = executable_dir.join("backend");
+          let formula_backend = executable_dir
+              .parent()
+              .map(|prefix| prefix.join("libexec/backend"));
 
           // Tauri's resource_dir resolver can return `unknown path` during
           // macOS setup. Use the stable .app layout instead:
@@ -175,11 +182,13 @@ pub fn run() {
           // bundles ship it in `Contents/Resources/backend`.
           if executable_backend.join("main.py").is_file() {
               executable_backend
+          } else if let Some(path) = formula_backend.filter(|path| path.join("main.py").is_file()) {
+              path
           } else if bundled_backend.join("main.py").is_file() {
               bundled_backend
           } else {
               eprintln!(
-                  "Backend was not found beside the executable or at {}. Rebuild the application so the backend directory is included in Resources.",
+                  "Backend was not found beside the executable, in the Homebrew libexec directory, or at {}. Rebuild the application so the backend directory is included in Resources.",
                   bundled_backend.display(),
               );
               return Ok(());
