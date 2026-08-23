@@ -40,12 +40,41 @@ fn resolve_python_path(backend_dir: &std::path::Path) -> std::path::PathBuf {
         return venv_python3;
     }
 
+    #[cfg(target_os = "macos")]
+    let candidate_paths = [
+        "/usr/bin/python3",
+        "/opt/homebrew/bin/python3",
+        "/usr/local/bin/python3",
+        "/bin/python3",
+    ];
+
+    #[cfg(not(target_os = "macos"))]
     let candidate_paths = [
         "/opt/homebrew/bin/python3",
         "/usr/local/bin/python3",
         "/usr/bin/python3",
         "/bin/python3",
     ];
+
+    #[cfg(target_os = "macos")]
+    if let Ok(required_version) = std::fs::read_to_string(backend_dir.join("runtime-python-macos")) {
+        let required_version = required_version.trim();
+        for path in &candidate_paths {
+            let candidate = std::path::Path::new(path);
+            if !candidate.exists() {
+                continue;
+            }
+            let version = std::process::Command::new(candidate)
+                .args(["-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"])
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+                .and_then(|output| String::from_utf8(output.stdout).ok());
+            if version.as_deref().map(str::trim) == Some(required_version) {
+                return candidate.to_path_buf();
+            }
+        }
+    }
 
     for path in &candidate_paths {
         let p = std::path::PathBuf::from(path);

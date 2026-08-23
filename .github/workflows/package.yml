@@ -47,6 +47,15 @@ jobs:
         with:
           node-version: "20"
 
+      # The macOS app launches the system/Command Line Tools Python when no
+      # project venv exists. Resolve the bundled libraries with that same
+      # minimum runtime so pip cannot include packages requiring Python 3.10+.
+      - name: Set up macOS backend Python
+        if: matrix.os == 'macos-latest'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
       - name: Install npm dependencies
         run: npm ci
       - name: Install frontend dependencies
@@ -78,10 +87,13 @@ jobs:
 
       - name: Bundle Python dependencies
         run: |
-          pip3 install -t backend/libs -r backend/requirements.txt
+          python3 -m pip install --upgrade --target backend/libs -r backend/requirements.txt
 
       - name: Verify bundled Python dependencies
         run: |
+          if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+            python3 -c "import sys; assert sys.version_info[:2] == (3, 9), sys.version"
+          fi
           PYTHONPATH=backend/libs python3 -c "import fastapi, kubernetes, kubernetes_asyncio, sse_starlette, uvicorn, websockets, yaml"
 
       - name: Derive package version from release tag
