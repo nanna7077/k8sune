@@ -169,7 +169,8 @@ const useStyles = makeStyles({
   },
   content: {
     minHeight: 0,
-    height: 'auto',
+    height: '100%',
+    maxHeight: '100%',
     overflowY: 'scroll',
     scrollbarGutter: 'stable',
     overflowX: 'hidden',
@@ -333,6 +334,13 @@ interface ResourceItem {
   status?: string;
   creation_timestamp?: string;
   [key: string]: any;
+}
+
+interface ResourceListPage {
+  items: ResourceItem[];
+  continue?: string | null;
+  total?: number | null;
+  token: string | null;
 }
 
 interface CRD {
@@ -500,7 +508,9 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
     setContexts, 
     setActiveContext,
     accent,
-    setAccent
+    setAccent,
+    loadAllResources,
+    setLoadAllResources,
   } = useStore();
 
   const [activeView, setActiveView] = useState('overview');
@@ -563,6 +573,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
   const [currentPage, setCurrentPage] = useState(0);
   const [pageTokens, setPageTokens] = useState<(string | null)[]>([null]);
   const listRequestSequence = useRef(0);
+  const pageCacheRef = useRef<Map<string, ResourceListPage>>(new Map());
   const [metrics, setMetrics] = useState<Record<string, any>>({});
   const [crds, setCrds] = useState<CRD[]>([]);
   const [pinnedCustomKinds, setPinnedCustomKinds] = useState<string[]>(() => {
@@ -931,7 +942,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
         method: 'POST'
       });
       feedback.notice('Port forward stopped', `Stopped forwarding for ${name}.`, 'success');
-      loadActivePortForwards();
+      void loadActivePortForwards();
     } catch (e: any) {
       feedback.notice('Could not stop port forward', e.message || String(e), 'error');
     }
@@ -1006,7 +1017,9 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
         }
         return apiFetch<{ items: ResourceItem[]; continue?: string | null; total?: number | null }>(listUrl(`/api/resources/${context}/${activeView}`));
       };
-      loadActivePortForwards();
+      if (['overview', 'nodes', 'services', 'other_services'].includes(activeView)) {
+        void loadActivePortForwards();
+      }
       if (activeView === 'overview') {
         const data = await apiFetch<any>(`/api/resources/${context}/overview`);
         setOverview(data);
@@ -1031,6 +1044,8 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
          setCrds(data.items);
       } else {
         const normalizedSearch = debouncedSearch.trim().toLowerCase();
+        const cacheScope = `${context}:${activeView}:${selectedNamespaces.join(',')}`;
+        const cacheKey = (index: number) => `${cacheScope}:${index}`;
         if (normalizedSearch) {
           // Kubernetes continuation tokens are server-side cursors. To make a
           // substring search complete, read the cursor chain in the background,
@@ -1051,7 +1066,40 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
           setCurrentPage(0);
           setPageTokens([null]);
           setNextPageToken(null);
+        } else if (loadAllResources) {
+          const allItems: ResourceItem[] = [];
+          let token: string | null = null;
+          do {
+            const data = await requestListPage(500, token);
+            if (!data || !isCurrentRequest()) return;
+            allItems.push(...data.items);
+            // Render the first batch immediately, then progressively append
+            // subsequent batches while this view remains active.
+            setResources([...allItems]);
+            setResourceTotal(data.total ?? (!data.continue ? allItems.length : null));
+            token = data.continue || null;
+          } while (token);
+          if (!isCurrentRequest()) return;
+          setResourceTotal(allItems.length);
+          setCurrentPage(0);
+          setPageTokens([null]);
+          setNextPageToken(null);
         } else {
+          const cached = pageCacheRef.current.get(cacheKey(pageIndex));
+          if (cached) {
+            setResources(cached.items);
+            setNextPageToken(cached.continue || null);
+            setResourceTotal(previous => cached.total ?? previous);
+            setCurrentPage(pageIndex);
+            setPageTokens(current => {
+              const tokens = [...current];
+              tokens[pageIndex] = cached.token;
+              if (cached.continue) tokens[pageIndex + 1] = cached.continue;
+              return tokens;
+            });
+            setLoading(false);
+            return;
+          }
           const discoveredTokens = pageIndex === 0 ? [null] : [...pageTokens];
           let token = pageIndex === 0 ? null : explicitPageToken ?? discoveredTokens[pageIndex];
           if (pageIndex > 0 && !token) {
@@ -1071,6 +1119,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
           const data = await requestListPage(20, token);
           if (!data) return;
           if (!isCurrentRequest()) return;
+          pageCacheRef.current.set(cacheKey(pageIndex), { ...data, token: token || null });
           setResources(data.items);
           setNextPageToken(data.continue || null);
           setResourceTotal(previous => {
@@ -1085,6 +1134,30 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
             else tokens.length = pageIndex + 1;
             return tokens;
           });
+
+          // Kubernetes continuation tokens cannot jump to an arbitrary page.
+          // Keep the next few pages warm so ordinary navigation is instant.
+          void (async () => {
+            let preloadToken = data.continue || null;
+            for (let preloadPage = pageIndex + 1; preloadPage <= pageIndex + 3 && preloadToken; preloadPage++) {
+              const key = cacheKey(preloadPage);
+              const cachedPage = pageCacheRef.current.get(key);
+              if (cachedPage) {
+                preloadToken = cachedPage.continue || null;
+                continue;
+              }
+              const preload = await requestListPage(20, preloadToken);
+              if (!preload || !isCurrentRequest()) return;
+              pageCacheRef.current.set(key, { ...preload, token: preloadToken });
+              setPageTokens(current => {
+                const tokens = [...current];
+                tokens[preloadPage] = preloadToken;
+                if (preload.continue) tokens[preloadPage + 1] = preload.continue;
+                return tokens;
+              });
+              preloadToken = preload.continue || null;
+            }
+          })();
         }
       }
       
@@ -1590,11 +1663,6 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
   useEffect(() => {
     if (selectedResource) listRequestSequence.current += 1;
     else loadData(0);
-    fetchNamespaces();
-    fetchClusterSettings();
-    if (crds.length === 0 && context) {
-        apiFetch<{ items: CRD[] }>(`/api/crds/${context}`).then(data => setCrds(data.items));
-    }
 
     const metricsInterval = setInterval(fetchMetrics, 30000);
     fetchMetrics();
@@ -1603,7 +1671,28 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
       if (eventSourceRef.current) eventSourceRef.current.close();
       clearInterval(metricsInterval);
     };
-  }, [activeView, context, selectedResource, selectedNamespaces, debouncedSearch, crds.length]);
+  }, [activeView, context, selectedResource, selectedNamespaces, debouncedSearch, loadAllResources]);
+
+  useEffect(() => {
+    if (!context) {
+      setNamespaces([]);
+      setCrds([]);
+      return;
+    }
+    let cancelled = false;
+    void fetchNamespaces();
+    void fetchClusterSettings();
+    void apiFetch<{ items: CRD[] }>(`/api/crds/${context}`)
+      .then(data => { if (!cancelled) setCrds(data.items); })
+      .catch(error => console.error('Could not load CRDs', error));
+    return () => { cancelled = true; };
+  }, [context]);
+
+  useEffect(() => {
+    if (activeView.startsWith('custom_') && crds.length > 0 && !selectedResource) {
+      void loadData(0);
+    }
+  }, [activeView, crds, selectedResource]);
 
   useEffect(() => {
       if (selectedResource) {
@@ -1679,10 +1768,10 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
   }, [resources, debouncedSearch, sortState, selectedNamespaces]);
 
   const visibleResources = useMemo(() => {
-    if (!debouncedSearch) return sortedAndFilteredResources;
+    if (!debouncedSearch || loadAllResources) return sortedAndFilteredResources;
     const start = currentPage * 20;
     return sortedAndFilteredResources.slice(start, start + 20);
-  }, [sortedAndFilteredResources, debouncedSearch, currentPage]);
+  }, [sortedAndFilteredResources, debouncedSearch, currentPage, loadAllResources]);
 
   const totalPages = debouncedSearch
     ? Math.max(1, Math.ceil(sortedAndFilteredResources.length / 20))
@@ -1696,11 +1785,12 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
   }, [reachablePageCount, currentPage]);
 
   useEffect(() => {
+    pageCacheRef.current.clear();
     setNextPageToken(null);
     setResourceTotal(null);
     setCurrentPage(0);
     setPageTokens([null]);
-  }, [activeView, selectedNamespaces, context]);
+  }, [activeView, selectedNamespaces, context, loadAllResources]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 250);
@@ -1738,6 +1828,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
         return [
           sortableHeader('name', 'Name'),
           sortableHeader('status', 'Status'),
+          sortableHeader('version', 'Kubernetes'),
           sortableHeader('internal_ip', 'Internal IP'),
           sortableHeader('external_ip', 'External IP'),
           sortableHeader('os', 'OS / Arch'),
@@ -1958,6 +2049,7 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
                 <TableRow key={r.name} onContextMenu={event => openResourceContextMenu(event, r)}>
                     <TableCell title={r.name}><span className={`${styles.clickableName} ${styles.truncatedName}`} onClick={() => setSelectedResource({ type: 'nodes', name: r.name })} onContextMenu={event => openResourceContextMenu(event, r)}>{r.name}</span></TableCell>
                     <TableCell><Badge color={r.status === 'Ready' ? 'success' : 'important'}>{r.status}</Badge></TableCell>
+                    <TableCell><code style={{ fontSize: '0.75rem' }}>{r.version || '---'}</code></TableCell>
                     <TableCell><code style={{ fontSize: '0.75rem' }}>{r.internal_ip}</code></TableCell>
                     <TableCell><code style={{ fontSize: '0.75rem' }}>{r.external_ip}</code></TableCell>
                     <TableCell><span style={{ fontSize: '0.8rem', opacity: 0.8 }}>{r.os}</span></TableCell>
@@ -2652,6 +2744,20 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
                       </span>
                     </div>
                     
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                      <Label weight="semibold">Resource list loading</Label>
+                      <Checkbox
+                        checked={loadAllResources}
+                        onChange={(_, data) => setLoadAllResources(Boolean(data.checked))}
+                        label="Load all resources when opening a list"
+                      />
+                      <span style={{ fontSize: '0.78rem', opacity: 0.68 }}>
+                        {loadAllResources
+                          ? 'Pagination is disabled. Large lists are loaded in batches and appended as they arrive.'
+                          : 'Load 20 resources at a time. The next three pages are prefetched for faster navigation.'}
+                      </span>
+                    </div>
+
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                       <Label weight="semibold">Metrics Source</Label>
                       <Dropdown 
@@ -3506,16 +3612,18 @@ export const Dashboard = ({ context: initialContext, initialResource, initialVie
               </div>
               <div aria-live="polite" style={{ minHeight: '38px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', fontSize: '0.78rem', opacity: 0.78 }}>
                 {loading && <Spinner size="tiny" label="Loading page" />}
-                <Button size="small" appearance="subtle" disabled={loading || currentPage === 0} onClick={() => debouncedSearch ? setCurrentPage(page => page - 1) : void loadData(currentPage - 1, pageTokens[currentPage - 1])}>Previous</Button>
                 {resourceTotal != null && <span>{resourceTotal} resources</span>}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  {paginationPages.map((pageIndex, position) => <span key={pageIndex} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    {position > 0 && pageIndex - paginationPages[position - 1] > 1 && <span>…</span>}
-                    <Button size="small" appearance={pageIndex === currentPage ? 'primary' : 'subtle'} disabled={loading} aria-label={`Page ${pageIndex + 1}`} onClick={() => debouncedSearch ? setCurrentPage(pageIndex) : void loadData(pageIndex, pageTokens[pageIndex])}>{pageIndex + 1}</Button>
-                  </span>)}
-                </div>
-                {totalPages && <span>of {totalPages}</span>}
-                <Button size="small" appearance="subtle" disabled={loading || (debouncedSearch ? currentPage >= (totalPages || 1) - 1 : !nextPageToken)} onClick={() => debouncedSearch ? setCurrentPage(page => page + 1) : void loadData(currentPage + 1, nextPageToken)}>Next</Button>
+                {!loadAllResources && <>
+                  <Button size="small" appearance="subtle" disabled={loading || currentPage === 0} onClick={() => debouncedSearch ? setCurrentPage(page => page - 1) : void loadData(currentPage - 1, pageTokens[currentPage - 1])}>Previous</Button>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    {paginationPages.map((pageIndex, position) => <span key={pageIndex} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      {position > 0 && pageIndex - paginationPages[position - 1] > 1 && <span>…</span>}
+                      <Button size="small" appearance={pageIndex === currentPage ? 'primary' : 'subtle'} disabled={loading} aria-label={`Page ${pageIndex + 1}`} onClick={() => debouncedSearch ? setCurrentPage(pageIndex) : void loadData(pageIndex, pageTokens[pageIndex])}>{pageIndex + 1}</Button>
+                    </span>)}
+                  </div>
+                  {totalPages && <span>of {totalPages}</span>}
+                  <Button size="small" appearance="subtle" disabled={loading || (debouncedSearch ? currentPage >= (totalPages || 1) - 1 : !nextPageToken)} onClick={() => debouncedSearch ? setCurrentPage(page => page + 1) : void loadData(currentPage + 1, nextPageToken)}>Next</Button>
+                </>}
               </div>
               </>
             )}

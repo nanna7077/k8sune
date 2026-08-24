@@ -64,22 +64,25 @@ def workload_restart_counts(workloads, pods):
 
 
 async def paged_workload_restart_counts(v1, workloads):
-    """Calculate restart counts one workload at a time without listing every Pod cluster-wide."""
-    counts = {}
-    for workload in workloads:
+    """Calculate restart counts concurrently without listing every Pod cluster-wide."""
+    semaphore = asyncio.Semaphore(8)
+
+    async def count_workload(workload):
         selector = (workload.spec.selector.match_labels or {}) if workload.spec and workload.spec.selector else {}
         selector_text = ','.join(f'{key}={value}' for key, value in selector.items())
         total, token = 0, None
-        while True:
-            page = await v1.list_namespaced_pod(workload.metadata.namespace, label_selector=selector_text, limit=250, _continue=token)
-            for pod in page.items:
-                statuses = ((pod.status.container_statuses or []) + (pod.status.init_container_statuses or [])) if pod.status else []
-                total += sum(status.restart_count or 0 for status in statuses)
-            token = getattr(page.metadata, '_continue', None) or getattr(page.metadata, 'continue_', None)
-            if not token:
-                break
-        counts[(workload.metadata.namespace, workload.metadata.name)] = total
-    return counts
+        async with semaphore:
+            while True:
+                page = await v1.list_namespaced_pod(workload.metadata.namespace, label_selector=selector_text, limit=250, _continue=token)
+                for pod in page.items:
+                    statuses = ((pod.status.container_statuses or []) + (pod.status.init_container_statuses or [])) if pod.status else []
+                    total += sum(status.restart_count or 0 for status in statuses)
+                token = getattr(page.metadata, '_continue', None) or getattr(page.metadata, 'continue_', None)
+                if not token:
+                    break
+        return (workload.metadata.namespace, workload.metadata.name), total
+
+    return dict(await asyncio.gather(*(count_workload(workload) for workload in workloads)))
 
 
 def page_result(response, mapper):
@@ -266,7 +269,6 @@ async def get_nodes(context_name: str, limit: int = Query(20, ge=1, le=500), con
         client = await cluster_manager.get_client(context_name)
         v1 = CoreV1Api(client)
         nodes = await v1.list_node(limit=limit, _continue=continue_token)
-        pods = await v1.list_pod_for_all_namespaces()
 
         # Pre-parse CPU/Mem helper functions (re-using from overview logic)
         def parse_cpu(cpu_str):
@@ -276,15 +278,34 @@ async def get_nodes(context_name: str, limit: int = Query(20, ge=1, le=500), con
 
         parse_mem = parse_memory_quantity
 
-        # Calculate reservations per node
-        node_stats = {n.metadata.name: {"cpu": 0, "mem": 0, "pods": 0} for n in nodes.items}
-        for p in pods.items:
-            if p.spec.node_name in node_stats and p.status.phase == "Running":
-                node_stats[p.spec.node_name]["pods"] += 1
-                for c in p.spec.containers:
-                    if c.resources and c.resources.requests:
-                        node_stats[p.spec.node_name]["cpu"] += parse_cpu(c.resources.requests.get('cpu', '0'))
-                        node_stats[p.spec.node_name]["mem"] += parse_mem(c.resources.requests.get('memory', '0'))
+        # Request Pods only for nodes shown on this page. Listing all Pods on
+        # every node-page request made large clusters needlessly slow.
+        semaphore = asyncio.Semaphore(8)
+
+        async def stats_for_node(node_name):
+            stats = {"cpu": 0, "mem": 0, "pods": 0}
+            token = None
+            async with semaphore:
+                while True:
+                    pod_page = await v1.list_pod_for_all_namespaces(
+                        field_selector=f"spec.nodeName={node_name}",
+                        limit=250,
+                        _continue=token,
+                    )
+                    for pod in pod_page.items:
+                        if pod.status.phase != "Running":
+                            continue
+                        stats["pods"] += 1
+                        for container in pod.spec.containers:
+                            if container.resources and container.resources.requests:
+                                stats["cpu"] += parse_cpu(container.resources.requests.get('cpu', '0'))
+                                stats["mem"] += parse_mem(container.resources.requests.get('memory', '0'))
+                    token = getattr(pod_page.metadata, '_continue', None) or getattr(pod_page.metadata, 'continue_', None)
+                    if not token:
+                        break
+            return node_name, stats
+
+        node_stats = dict(await asyncio.gather(*(stats_for_node(node.metadata.name) for node in nodes.items)))
 
         items = []
         for n in nodes.items:
