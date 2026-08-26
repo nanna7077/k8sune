@@ -16,11 +16,21 @@ import { waitForBackend } from './utils/api';
 
 const appContentStyle = {
   marginTop: '32px',
-  height: 'calc(100% - 32px)',
+  flex: '1 1 0',
   minHeight: 0,
   width: '100%',
   boxSizing: 'border-box' as const,
   display: 'flex',
+  overflow: 'hidden',
+};
+
+const providerStyle = {
+  height: '100%',
+  minHeight: 0,
+  width: '100%',
+  display: 'flex',
+  flexDirection: 'column' as const,
+  overflow: 'hidden',
 };
 
 function App() {
@@ -83,7 +93,7 @@ function App() {
 
   if (!backendReady) {
     return (
-      <FluentProvider theme={theme} style={{ height: '100%' }}>
+      <FluentProvider theme={theme} style={providerStyle}>
         <TitleBar />
         <WindowResizer />
         <main
@@ -130,7 +140,7 @@ function App() {
 
   if (section === 'logs' && context && pod) {
     return (
-      <FluentProvider theme={theme} style={{ height: '100%' }}>
+      <FluentProvider theme={theme} style={providerStyle}>
         <TitleBar title={`k8sune - Logs [${pod}]`} />
         <WindowResizer />
         <div style={appContentStyle}>
@@ -142,7 +152,7 @@ function App() {
 
   if (section === 'yaml' && context && name && resourceType) {
     return (
-      <FluentProvider theme={theme} style={{ height: '100%' }}>
+      <FluentProvider theme={theme} style={providerStyle}>
         <TitleBar title={`k8sune - YAML [${name}]`} />
         <WindowResizer />
         <div style={appContentStyle}>
@@ -154,7 +164,7 @@ function App() {
 
   if (section === 'resource' && context && name && resourceType) {
     return (
-      <FluentProvider theme={theme} style={{ height: '100%' }}>
+      <FluentProvider theme={theme} style={providerStyle}>
         <TitleBar title={`k8sune - ${name}`} />
         <WindowResizer />
         <div style={appContentStyle}>
@@ -166,7 +176,7 @@ function App() {
 
   if (section === 'view' && context && view) {
     return (
-      <FluentProvider theme={theme} style={{ height: '100%' }}>
+      <FluentProvider theme={theme} style={providerStyle}>
         <TitleBar title={`k8sune - ${view}`} />
         <WindowResizer />
         <div style={appContentStyle}>
@@ -177,11 +187,11 @@ function App() {
   }
 
   if (section === 'node-command' && context) {
-    return <FluentProvider theme={theme} style={{ height: '100%' }}><TitleBar title="k8sune - Run on Nodes" /><WindowResizer /><NodeCommandRunner context={context} /></FluentProvider>;
+    return <FluentProvider theme={theme} style={providerStyle}><TitleBar title="k8sune - Run on Nodes" /><WindowResizer /><NodeCommandRunner context={context} /></FluentProvider>;
   }
 
   return (
-    <FluentProvider theme={theme} style={{ height: '100%' }}>
+    <FluentProvider theme={theme} style={providerStyle}>
        <TitleBar />
        <WindowResizer />
        <div style={appContentStyle}>

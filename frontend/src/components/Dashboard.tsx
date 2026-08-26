@@ -112,17 +112,17 @@ const useStyles = makeStyles({
   },
   mainContainer: {
     flex: 1,
-    display: 'grid',
+    display: 'flex',
+    flexDirection: 'column',
     height: '100%',
-    gridTemplateRows: 'minmax(0, 1fr)',
     minHeight: 0,
     minWidth: 0,
     overflow: 'hidden'
   },
   main: {
-    display: 'grid',
-    gridTemplateRows: 'auto minmax(0, 1fr)',
-    height: '100%',
+    display: 'flex',
+    flexDirection: 'column',
+    flex: '1 1 0',
     overflow: 'hidden',
     minHeight: 0,
     minWidth: 0,
@@ -133,6 +133,9 @@ const useStyles = makeStyles({
     ...shorthands.borderTop('1px', 'solid', 'rgba(171, 183, 220, 0.14)'),
     display: 'flex',
     flexDirection: 'column',
+    flex: '0 0 auto',
+    minHeight: 0,
+    overflow: 'hidden',
     zIndex: 10,
     position: 'relative'
   },
@@ -158,6 +161,7 @@ const useStyles = makeStyles({
     ...shorthands.borderBottom('1px', 'solid', 'rgba(171, 183, 220, 0.1)'),
   },
   header: {
+    flex: '0 0 auto',
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -168,11 +172,11 @@ const useStyles = makeStyles({
     backdropFilter: 'blur(16px)',
   },
   content: {
+    flex: '1 1 0',
     minHeight: 0,
-    height: '100%',
-    maxHeight: '100%',
     overflowY: 'scroll',
     scrollbarGutter: 'stable',
+    overscrollBehavior: 'contain',
     overflowX: 'hidden',
     ...shorthands.padding('1.75rem'),
     display: 'flex',
@@ -186,6 +190,7 @@ const useStyles = makeStyles({
     '&::-webkit-scrollbar-thumb:hover': { backgroundColor: 'rgba(171, 183, 220, 0.58)' },
   },
   tableCard: {
+    flexShrink: 0,
     backgroundColor: 'rgba(20, 22, 30, 0.72)',
     ...shorthands.border('1px', 'solid', 'rgba(171, 183, 220, 0.13)'),
     ...shorthands.borderRadius('14px'),
